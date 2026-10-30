@@ -26,7 +26,8 @@ VALID_SKILL_LEVELS = ("Beginner", "Intermediate", "Advanced")
 DEFAULT_PROVIDER = "groq"
 DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
 DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
-VALID_PROVIDERS = ("groq", "gemini")
+DEFAULT_OLLAMA_MODEL = "qwen2.5-coder:7b"
+VALID_PROVIDERS = ("groq", "gemini", "ollama")
 PROVIDER_MODELS = {
     "groq": [
         "llama-3.3-70b-versatile",
@@ -38,6 +39,11 @@ PROVIDER_MODELS = {
         "gemini-2.5-flash",
         "gemini-2.0-flash",
         "gemini-1.5-flash",
+    ],
+    "ollama": [
+        "qwen2.5-coder:7b",
+        "llama3.2:3b",
+        "mistral:7b",
     ],
 }
 
@@ -213,11 +219,13 @@ def get_or_create_profile(
                 existing["active_provider"] = DEFAULT_PROVIDER
                 dirty = True
             if "model_name" not in existing:
-                default_model = (
-                    DEFAULT_GROQ_MODEL
-                    if existing.get("active_provider") == "groq"
-                    else DEFAULT_GEMINI_MODEL
-                )
+                prov = existing.get("active_provider")
+                if prov == "groq":
+                    default_model = DEFAULT_GROQ_MODEL
+                elif prov == "ollama":
+                    default_model = DEFAULT_OLLAMA_MODEL
+                else:
+                    default_model = DEFAULT_GEMINI_MODEL
                 existing["model_name"] = default_model
                 dirty = True
             if dirty:
@@ -257,9 +265,12 @@ def update_provider_settings(
         )
 
     if not model_name:
-        model_name = (
-            DEFAULT_GROQ_MODEL if provider_clean == "groq" else DEFAULT_GEMINI_MODEL
-        )
+        if provider_clean == "groq":
+            model_name = DEFAULT_GROQ_MODEL
+        elif provider_clean == "ollama":
+            model_name = DEFAULT_OLLAMA_MODEL
+        else:
+            model_name = DEFAULT_GEMINI_MODEL
 
     profile = get_or_create_profile(path)
     profile["active_provider"] = provider_clean

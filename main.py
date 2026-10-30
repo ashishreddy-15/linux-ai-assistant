@@ -106,9 +106,11 @@ def launch_gui(force_onboarding: bool = False) -> int:
     model_name = profile.get("model_name")
 
     api_key = get_api_key(provider)
+    if provider == "ollama":
+        api_key = api_key or "ollama"
 
     # Trigger onboarding modal if no API key is saved for active provider or if explicitly requested
-    if not api_key or force_onboarding:
+    if (not api_key and provider != "ollama") or force_onboarding:
         onboarding = OnboardingModal(profile=profile)
         onboarding.exec()
         # Refresh profile and key
@@ -117,6 +119,8 @@ def launch_gui(force_onboarding: bool = False) -> int:
         provider = profile.get("active_provider", "groq")
         model_name = profile.get("model_name")
         api_key = get_api_key(provider)
+        if provider == "ollama":
+            api_key = api_key or "ollama"
 
     # Initialize client and orchestrator
     system_prompt = build_system_prompt(profile, dynamic, skill_level)

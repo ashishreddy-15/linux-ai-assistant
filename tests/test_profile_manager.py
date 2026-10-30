@@ -12,6 +12,7 @@ from config.profile_manager import (
     DEFAULT_PROVIDER,
     DEFAULT_GROQ_MODEL,
     DEFAULT_GEMINI_MODEL,
+    DEFAULT_OLLAMA_MODEL,
     VALID_SKILL_LEVELS,
     detect_cpu_architecture,
     detect_os_release,
@@ -138,6 +139,10 @@ class TestProfileManager(unittest.TestCase):
             updated = update_provider_settings("gemini", path=target)
             self.assertEqual(updated["active_provider"], "gemini")
             self.assertEqual(updated["model_name"], DEFAULT_GEMINI_MODEL)
+
+            updated = update_provider_settings("ollama", path=target)
+            self.assertEqual(updated["active_provider"], "ollama")
+            self.assertEqual(updated["model_name"], DEFAULT_OLLAMA_MODEL)
 
             with self.assertRaises(ValueError):
                 update_provider_settings("invalid_provider", path=target)

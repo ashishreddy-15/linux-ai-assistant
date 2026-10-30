@@ -143,6 +143,12 @@ class TestApprovalCard(unittest.TestCase):
 
 
 class TestOnboardingModal(unittest.TestCase):
+    @classmethod
+    def tearDownClass(cls):
+        from ui.onboarding_modal import _active_workers
+
+        for w in list(_active_workers):
+            w.wait(3000)
     def test_modal_initialization(self):
         modal = OnboardingModal()
         self.assertEqual(modal.windowTitle(), "Linux AI Assistant – Setup & Configuration")
@@ -205,6 +211,63 @@ class TestOnboardingModal(unittest.TestCase):
         modal._save_settings()
         self.assertEqual(len(saved_values), 1)
         self.assertEqual(saved_values[0][3], "llama-3.1-8b-instant")
+
+    def test_onboarding_modal_ollama_selection_and_ui_state(self):
+        with patch("config.keyring_manager.check_ollama_status", return_value=(True, "Ollama is running locally")):
+            modal = OnboardingModal()
+            idx = modal._provider_combo.findData("ollama")
+            self.assertGreaterEqual(idx, 0)
+            modal._provider_combo.setCurrentIndex(idx)
+
+            # API Key input should be hidden and disabled
+            self.assertFalse(modal._key_input.isVisible())
+            self.assertFalse(modal._key_input.isEnabled())
+            self.assertFalse(modal._toggle_btn.isVisible())
+
+            # Test button should say "Test Connection"
+            self.assertEqual(modal._test_btn.text(), "Test Connection")
+            self.assertIn("http://127.0.0.1:11434", modal._key_hint.text())
+            if modal._test_worker:
+                modal._test_worker.wait(1000)
+
+    def test_onboarding_modal_ollama_test_connection_warning(self):
+        with patch("config.keyring_manager.check_ollama_status", return_value=(False, "Could not connect to Ollama daemon on localhost:11434")):
+            modal = OnboardingModal()
+            idx = modal._provider_combo.findData("ollama")
+            modal._provider_combo.setCurrentIndex(idx)
+            if modal._test_worker:
+                modal._test_worker.wait(1000)
+
+            # Simulate daemon not running
+            modal._on_test_result(
+                False, "Could not connect to Ollama daemon on localhost:11434", []
+            )
+            self.assertIn("Could not connect to Ollama daemon on localhost:11434", modal._status_label.text())
+            self.assertIn("Run: systemctl start ollama or ollama serve", modal._status_label.text())
+
+    def test_onboarding_modal_ollama_test_connection_success(self):
+        with patch("config.keyring_manager.check_ollama_status", return_value=(True, "Ollama is running locally")):
+            modal = OnboardingModal()
+            idx = modal._provider_combo.findData("ollama")
+            modal._provider_combo.setCurrentIndex(idx)
+            if modal._test_worker:
+                modal._test_worker.wait(1000)
+
+            # Simulate daemon running with local models
+            modal._on_test_result(
+                True, "Ollama is running locally", ["qwen2.5-coder:7b", "llama3.2:3b"]
+            )
+            self.assertIn("Ollama is running locally", modal._status_label.text())
+            items = [modal.model_dropdown.itemText(i) for i in range(modal.model_dropdown.count())]
+            self.assertEqual(items, ["qwen2.5-coder:7b", "llama3.2:3b"])
+
+        # Simulate daemon running with local models
+        modal._on_test_result(
+            True, "Ollama is running locally", ["qwen2.5-coder:7b", "llama3.2:3b"]
+        )
+        self.assertIn("Ollama is running locally", modal._status_label.text())
+        items = [modal.model_dropdown.itemText(i) for i in range(modal.model_dropdown.count())]
+        self.assertEqual(items, ["qwen2.5-coder:7b", "llama3.2:3b"])
 
     def test_modal_surface_cards_and_button_text(self):
         modal = OnboardingModal()
@@ -372,6 +435,57 @@ class TestMainWindow(unittest.TestCase):
         # Reset / clear conversation
         self.window.reset_conversation()
         self.assertFalse(self.window.starter_chips.isHidden())
+
+    def test_chat_column_geometry_does_not_collapse_when_chips_hide(self):
+        self.window.resize(1150, 750)
+        self.window.show()
+        _app.processEvents()
+
+        col = self.window._chat_scroll.parentWidget()
+        self.assertEqual(col.width(), 1150)
+
+        # Hide starter chips (simulating user sending a message)
+        self.window.starter_chips.hide()
+        _app.processEvents()
+        self.assertEqual(col.width(), 1150)
+
+    def test_chat_column_scalable_at_various_window_sizes(self):
+        self.window.show()
+        _app.processEvents()
+        col = self.window._chat_scroll.parentWidget()
+
+        for w in (850, 940, 1150, 1400):
+            self.window.resize(w, 800)
+            _app.processEvents()
+            self.assertEqual(col.width(), w)
+
+        # Verify command bar input scales to full width after message is sent
+        self.window.resize(940, 1024)
+        _app.processEvents()
+        self.window.input_field.setText("test")
+        with patch.object(self.orchestrator, "send_message"):
+            self.window._on_send_message()
+        _app.processEvents()
+        self.assertEqual(col.width(), 940)
+        self.assertEqual(self.window.input_field.parentWidget().width(), 940 - 32)
+
+    def test_chat_bubble_assistant_expands_to_full_column_width(self):
+        self.window.resize(1150, 750)
+        self.window.show()
+        _app.processEvents()
+
+        asst_bubble = self.window._chat_layout.itemAt(0).widget()
+        self.assertGreaterEqual(asst_bubble.width(), 700)
+
+    def test_chat_bubble_user_sizing_and_alignment(self):
+        self.window.resize(1150, 750)
+        self.window.show()
+        _app.processEvents()
+
+        user_bubble = self.window._append_message("user", "test")
+        _app.processEvents()
+        self.assertLess(user_bubble.width(), 100)
+        self.assertGreater(user_bubble.x(), 600)
 
 
 class TestStarterChipsWidget(unittest.TestCase):

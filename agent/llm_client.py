@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 
 GEMINI_DEFAULT_MODEL = "gemini-3.8-flash"
 GROQ_DEFAULT_MODEL = "llama-3.3-70b-versatile"
+OLLAMA_DEFAULT_MODEL = "qwen2.5-coder:7b"
 MODEL_ID = GEMINI_DEFAULT_MODEL
 
 FALLBACK_MODELS: Dict[str, List[str]] = {
@@ -44,6 +45,11 @@ FALLBACK_MODELS: Dict[str, List[str]] = {
         "gemini-2.5-flash",
         "gemini-2.0-flash",
         "gemini-1.5-flash",
+    ],
+    "ollama": [
+        "qwen2.5-coder:7b",
+        "llama3.2:3b",
+        "mistral:7b",
     ],
 }
 
@@ -511,6 +517,9 @@ class GroqAgentClient(BaseLLMClient):
         raise RuntimeError("generate() failed without returning a response or raising an exception.")
 
 
+OpenAIAgentClient = GroqAgentClient
+
+
 def create_llm_client(
     provider: str,
     api_key: str,
@@ -522,22 +531,33 @@ def create_llm_client(
     if prov == "groq":
         model = model_name or GROQ_DEFAULT_MODEL
         return GroqAgentClient(api_key=api_key, system_prompt=system_prompt, model=model)
+    elif prov == "ollama":
+        model = model_name or OLLAMA_DEFAULT_MODEL
+        dummy_key = api_key or "ollama"
+        return GroqAgentClient(
+            api_key=dummy_key,
+            system_prompt=system_prompt,
+            model=model,
+            base_url="http://127.0.0.1:11434/v1",
+        )
     elif prov == "gemini":
         model = model_name or GEMINI_DEFAULT_MODEL
         return GeminiAgentClient(api_key=api_key, system_prompt=system_prompt, model=model)
     else:
-        raise ValueError(f"Unknown provider '{provider}'. Must be 'groq' or 'gemini'.")
+        raise ValueError(
+            f"Unknown provider '{provider}'. Must be 'groq', 'gemini', or 'ollama'."
+        )
 
 
-def fetch_available_models(provider: str, api_key: str) -> List[str]:
+def fetch_available_models(provider: str, api_key: str = "") -> List[str]:
     """Dynamically fetch available chat-capable model IDs for the given provider.
 
     Parameters
     ----------
     provider:
-        'groq' or 'gemini'
+        'groq', 'gemini', or 'ollama'
     api_key:
-        Provider API key
+        Provider API key (optional for local providers like Ollama)
 
     Returns
     -------
@@ -548,10 +568,43 @@ def fetch_available_models(provider: str, api_key: str) -> List[str]:
     fallback = list(FALLBACK_MODELS.get(prov, []))
     cleaned_key = (api_key or "").strip()
 
-    if not cleaned_key:
+    if prov != "ollama" and not cleaned_key:
         return fallback
 
-    if prov == "groq":
+    if prov == "ollama":
+        try:
+            from openai import OpenAI
+
+            client = OpenAI(
+                base_url="http://127.0.0.1:11434/v1",
+                api_key=cleaned_key or "ollama",
+                timeout=3.0,
+            )
+            response = client.models.list()
+            raw_data = getattr(response, "data", response)
+            models_data = (
+                list(raw_data) if not isinstance(raw_data, (list, tuple)) else raw_data
+            )
+            models: List[str] = []
+            for m in models_data:
+                model_id = getattr(m, "id", None)
+                if not model_id and isinstance(m, dict):
+                    model_id = m.get("id")
+                elif not model_id and isinstance(m, str):
+                    model_id = m
+                if model_id and isinstance(model_id, str):
+                    models.append(model_id)
+
+            if models:
+                seen = set()
+                deduped = [x for x in models if not (x in seen or seen.add(x))]
+                return deduped
+            return fallback
+        except Exception as exc:
+            logger.warning("Failed to fetch Ollama models (%s); using fallbacks.", exc)
+            return fallback
+
+    elif prov == "groq":
         try:
             from openai import OpenAI
 

@@ -8,9 +8,11 @@ from unittest.mock import MagicMock, patch
 from google.genai import errors, types
 
 from agent.llm_client import (
+    OLLAMA_DEFAULT_MODEL,
     BaseLLMClient,
     GeminiAgentClient,
     GroqAgentClient,
+    OpenAIAgentClient,
     create_llm_client,
     fetch_available_models,
     is_transient_error,
@@ -304,6 +306,17 @@ class TestCreateLLMClientFactory(unittest.TestCase):
         self.assertIsInstance(client, GeminiAgentClient)
         self.assertEqual(client._model, "gemini-3.8-flash")
 
+    def test_create_ollama_client(self):
+        client = create_llm_client("ollama", "", model_name="qwen2.5-coder:7b")
+        self.assertIsInstance(client, (GroqAgentClient, OpenAIAgentClient))
+        self.assertEqual(client._model, "qwen2.5-coder:7b")
+        self.assertIn("11434", str(client._client.base_url))
+
+    def test_create_ollama_client_default_model(self):
+        client = create_llm_client("ollama", "")
+        self.assertIsInstance(client, (GroqAgentClient, OpenAIAgentClient))
+        self.assertEqual(client._model, OLLAMA_DEFAULT_MODEL)
+
     def test_create_invalid_provider_raises(self):
         with self.assertRaises(ValueError):
             create_llm_client("unknown_provider", "key")
@@ -365,6 +378,38 @@ class TestFetchAvailableModels(unittest.TestCase):
         models = fetch_available_models("groq", "")
         self.assertIsInstance(models, list)
         self.assertIn("llama-3.3-70b-versatile", models)
+
+    def test_fetch_ollama_models_success(self):
+        with patch("openai.OpenAI") as mock_openai_cls:
+            mock_client = MagicMock()
+            mock_openai_cls.return_value = mock_client
+            m1 = MagicMock(id="qwen2.5-coder:7b")
+            m2 = MagicMock(id="llama3.2:3b")
+            mock_client.models.list.return_value = MagicMock(data=[m1, m2])
+
+            models = fetch_available_models("ollama", "")
+            self.assertEqual(models, ["qwen2.5-coder:7b", "llama3.2:3b"])
+            mock_openai_cls.assert_called_once_with(
+                base_url="http://127.0.0.1:11434/v1", api_key="ollama", timeout=3.0
+            )
+
+    def test_fetch_ollama_models_empty_falls_back(self):
+        with patch("openai.OpenAI") as mock_openai_cls:
+            mock_client = MagicMock()
+            mock_openai_cls.return_value = mock_client
+            mock_client.models.list.return_value = MagicMock(data=[])
+
+            models = fetch_available_models("ollama", "")
+            self.assertEqual(models, ["qwen2.5-coder:7b", "llama3.2:3b", "mistral:7b"])
+
+    def test_fetch_ollama_models_failure_falls_back(self):
+        with patch("openai.OpenAI") as mock_openai_cls:
+            mock_client = MagicMock()
+            mock_openai_cls.return_value = mock_client
+            mock_client.models.list.side_effect = ConnectionError("Connection refused")
+
+            models = fetch_available_models("ollama", "")
+            self.assertEqual(models, ["qwen2.5-coder:7b", "llama3.2:3b", "mistral:7b"])
 
 
 if __name__ == "__main__":

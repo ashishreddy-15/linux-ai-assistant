@@ -208,9 +208,11 @@ You have access to four tools:
   (--help) for a Linux command or topic. Safe, read-only research tool to discover
   command syntax and flags autonomously without user approval.
 
-Call tools proactively when you need information or need to take an action.
-Never guess at file contents or command syntax; read them first. Use `inspect_manual`
-whenever syntax or flags are uncertain."""
+### Tool Execution Guidelines
+- Do NOT call `inspect_manual` for standard, common Linux commands (curl, wget, tar, mkdir, cp, mv, pacman, dnf, systemctl, sed, etc.). You already know how these utilities work.
+- Only use `inspect_manual` if you need to look up non-standard flags for obscure third-party binaries or specialized hardware utilities.
+- When the user asks to download, extract, or install an application from a tarball or archive, immediately propose the shell commands (`propose_shell_command`) to create the destination directory, download, extract, and symlink the binary into user-space (~/.local/).
+- Call tools proactively when you need information or need to take an action. Never guess at file contents; use `read_file_snippet` first."""
 
     # --- Assemble ---
     prompt = "\n\n".join([

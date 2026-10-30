@@ -16,12 +16,18 @@ logger = logging.getLogger(__name__)
 SERVICE_NAME = "linux-ai-helper"
 GEMINI_KEY_NAME = "gemini_api_key"
 GROQ_KEY_NAME = "groq_api_key"
+OLLAMA_KEY_NAME = "ollama_api_key"
 KEY_NAME = GEMINI_KEY_NAME
 
 
 def _key_name_for_provider(provider: str) -> str:
     """Return the keyring item key name for the given provider."""
-    return GROQ_KEY_NAME if provider.strip().lower() == "groq" else GEMINI_KEY_NAME
+    p = provider.strip().lower()
+    if p == "groq":
+        return GROQ_KEY_NAME
+    elif p == "ollama":
+        return OLLAMA_KEY_NAME
+    return GEMINI_KEY_NAME
 
 
 def save_api_key(api_key: str, provider: str = "gemini") -> None:
@@ -145,7 +151,25 @@ def test_groq_api_key(
         return False, str(exc)
 
 
-def fetch_available_models(provider: str, api_key: str) -> list[str]:
+def check_ollama_status(
+    base_url: str = "http://127.0.0.1:11434/v1",
+) -> Tuple[bool, str]:
+    """Ping the Ollama local daemon /models endpoint using OpenAI client.
+
+    Returns (True, "Ollama is running locally") or
+    (False, "Could not connect to Ollama daemon on localhost:11434").
+    """
+    try:
+        from openai import OpenAI
+
+        client = OpenAI(base_url=base_url, api_key="ollama", timeout=3.0)
+        client.models.list()
+        return True, "Ollama is running locally"
+    except Exception:
+        return False, "Could not connect to Ollama daemon on localhost:11434"
+
+
+def fetch_available_models(provider: str, api_key: str = "") -> list[str]:
     """Dynamically fetch available chat-capable model IDs for the given provider."""
     from agent.llm_client import fetch_available_models as _fetch
 

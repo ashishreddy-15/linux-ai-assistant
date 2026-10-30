@@ -4,10 +4,15 @@ from __future__ import annotations
 
 import unittest
 from unittest.mock import MagicMock, patch
+import keyring
+from keyring.backend import KeyringBackend
 
 from config.keyring_manager import (
     KEY_NAME,
+    OLLAMA_KEY_NAME,
     SERVICE_NAME,
+    _key_name_for_provider,
+    check_ollama_status,
     delete_api_key,
     fetch_available_models,
     get_api_key,
@@ -17,7 +22,34 @@ from config.keyring_manager import (
 )
 
 
+class _MemoryKeyring(KeyringBackend):
+    priority = 1
+
+    def __init__(self):
+        self._passwords = {}
+
+    def get_password(self, service, username):
+        return self._passwords.get((service, username))
+
+    def set_password(self, service, username, password):
+        self._passwords[(service, username)] = password
+
+    def delete_password(self, service, username):
+        if (service, username) in self._passwords:
+            del self._passwords[(service, username)]
+        else:
+            from keyring.errors import PasswordDeleteError
+
+            raise PasswordDeleteError("Password not found")
+
+
 class TestKeyringManager(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        try:
+            keyring.get_password("test-probe", "probe-user")
+        except Exception:
+            keyring.set_keyring(_MemoryKeyring())
     def test_save_and_retrieve_api_key(self):
         test_key = "test-secret-key-12345"
         save_api_key(test_key)
@@ -99,6 +131,37 @@ class TestKeyringManager(unittest.TestCase):
             models = fetch_available_models("groq", "test-key")
             self.assertEqual(models, ["test-model-1", "test-model-2"])
             mock_fetch.assert_called_once_with("groq", "test-key")
+
+    def test_check_ollama_status_running(self):
+        with patch("openai.OpenAI") as mock_openai_cls:
+            mock_instance = MagicMock()
+            mock_openai_cls.return_value = mock_instance
+            mock_instance.models.list.return_value = MagicMock(
+                data=[MagicMock(id="qwen2.5-coder:7b")]
+            )
+
+            success, message = check_ollama_status("http://127.0.0.1:11434/v1")
+            self.assertTrue(success)
+            self.assertEqual(message, "Ollama is running locally")
+            mock_openai_cls.assert_called_once_with(
+                base_url="http://127.0.0.1:11434/v1", api_key="ollama", timeout=3.0
+            )
+            mock_instance.models.list.assert_called_once()
+
+    def test_check_ollama_status_not_running(self):
+        with patch("openai.OpenAI") as mock_openai_cls:
+            mock_instance = MagicMock()
+            mock_openai_cls.return_value = mock_instance
+            mock_instance.models.list.side_effect = ConnectionError("Connection refused")
+
+            success, message = check_ollama_status("http://127.0.0.1:11434/v1")
+            self.assertFalse(success)
+            self.assertEqual(
+                message, "Could not connect to Ollama daemon on localhost:11434"
+            )
+
+    def test_ollama_key_name_for_provider(self):
+        self.assertEqual(_key_name_for_provider("ollama"), OLLAMA_KEY_NAME)
 
 
 if __name__ == "__main__":

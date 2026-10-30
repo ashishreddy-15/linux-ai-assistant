@@ -15,7 +15,7 @@ from pathlib import Path
 import re
 from typing import Any, Dict, Optional
 
-from PySide6.QtCore import QEvent, QObject, QPoint, QSize, Qt, QTimer, Signal, Slot
+from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QSize, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QFont, QIcon, QTextCursor
 from PySide6.QtWidgets import (
     QComboBox,
@@ -109,7 +109,7 @@ class ChatBubble(QFrame):
                 "}"
             )
         else:
-            self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+            self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
             layout.setContentsMargins(0, 6, 0, 8)
             self._header.setStyleSheet("color: #888888; font-size: 11px; font-weight: 600;")
             self._content.setStyleSheet(
@@ -122,13 +122,40 @@ class ChatBubble(QFrame):
                 "}"
             )
 
+    def sizeHint(self) -> QSize:
+        if self._role == "user":
+            text = self._content.text()
+            if not text:
+                return super().sizeHint()
+            fm = self._content.fontMetrics()
+            lines = text.split("\n")
+            longest_line = max((fm.horizontalAdvance(line) for line in lines), default=0)
+            header_w = self._header.fontMetrics().horizontalAdvance(self._header.text())
+            content_w = max(longest_line, header_w)
+
+            parent = self.parentWidget()
+            parent_w = parent.width() if parent and parent.width() > 0 else 780
+            max_bubble_width = max(560, int(parent_w * 0.75))
+            bubble_w = min(max_bubble_width, content_w + 28)
+
+            bounding = fm.boundingRect(
+                QRect(0, 0, bubble_w - 28, 10000),
+                Qt.TextFlag.TextWordWrap,
+                text,
+            )
+            bubble_h = bounding.height() + self._header.sizeHint().height() + 4 + 20
+            return QSize(bubble_w, max(bubble_h, 38))
+        return super().sizeHint()
+
     def set_text(self, text: str) -> None:
         """Update bubble content in place (for streaming tokens)."""
         self._content.setText(text)
+        self.updateGeometry()
 
     def append_text(self, chunk: str) -> None:
         """Append chunk to bubble content."""
         self._content.setText(self._content.text() + chunk)
+        self.updateGeometry()
 
 
 class ThinkingBubble(QFrame):
@@ -392,7 +419,6 @@ class MainWindow(QMainWindow):
         self._settings_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._settings_btn.clicked.connect(self._open_settings)
         top_bar.addWidget(self._settings_btn)
-        top_bar.addWidget(self._settings_btn)
 
         root_layout.addWidget(top_bar_widget)
 
@@ -401,21 +427,19 @@ class MainWindow(QMainWindow):
         self._splitter.setChildrenCollapsible(True)
         self._splitter.setHandleWidth(1)
 
-        # --- Centered Chat Reading Column (max-width: 780px) ---
+        # --- Scalable Chat Column ---
         chat_outer = QWidget(self._splitter)
-        chat_h_layout = QHBoxLayout(chat_outer)
-        chat_h_layout.setContentsMargins(0, 0, 0, 0)
-        chat_h_layout.setSpacing(0)
+        chat_outer_layout = QVBoxLayout(chat_outer)
+        chat_outer_layout.setContentsMargins(0, 0, 0, 0)
+        chat_outer_layout.setSpacing(0)
 
         chat_column = QWidget(chat_outer)
-        chat_column.setMaximumWidth(780)
+        chat_column.setMinimumWidth(320)
+        chat_column.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         chat_layout = QVBoxLayout(chat_column)
         chat_layout.setContentsMargins(16, 12, 16, 12)
         chat_layout.setSpacing(10)
-
-        chat_h_layout.addStretch(1)
-        chat_h_layout.addWidget(chat_column)
-        chat_h_layout.addStretch(1)
+        chat_outer_layout.addWidget(chat_column)
 
         # Scrollable chat messages container
         self._chat_scroll = QScrollArea(chat_column)
@@ -604,8 +628,10 @@ class MainWindow(QMainWindow):
         bubble = ChatBubble(role=role, text=text, parent=self._chat_container)
         # Insert before the stretch item
         idx = max(0, self._chat_layout.count() - 1)
-        align = Qt.AlignmentFlag.AlignRight if role == "user" else Qt.AlignmentFlag.AlignLeft
-        self._chat_layout.insertWidget(idx, bubble, 0, align)
+        if role == "user":
+            self._chat_layout.insertWidget(idx, bubble, 0, Qt.AlignmentFlag.AlignRight)
+        else:
+            self._chat_layout.insertWidget(idx, bubble, 0)
         self._scroll_chat_to_bottom()
         return bubble
 
@@ -663,7 +689,10 @@ class MainWindow(QMainWindow):
         if skill not in VALID_SKILL_LEVELS:
             return
         self._skill_level = skill
-        update_skill_level(skill)
+        try:
+            update_skill_level(skill)
+        except OSError:
+            pass
         self._approval_card.set_skill_level(skill)
 
         # Update system prompt in orchestrator client
@@ -703,7 +732,7 @@ class MainWindow(QMainWindow):
         if self._thinking_bubble is None:
             self._thinking_bubble = ThinkingBubble(self._chat_container)
             idx = max(0, self._chat_layout.count() - 1)
-            self._chat_layout.insertWidget(idx, self._thinking_bubble, 0, Qt.AlignmentFlag.AlignLeft)
+            self._chat_layout.insertWidget(idx, self._thinking_bubble, 0)
         self._thinking_bubble.show()
         self._thinking_bubble.start_animation()
         self._scroll_chat_to_bottom()
@@ -736,8 +765,9 @@ class MainWindow(QMainWindow):
             self._profile["model_name"] = model
         self._update_status_bar()
 
-        # Re-initialize client if key changed
-        if api_key:
+        # Re-initialize client if key changed or provider is ollama
+        effective_key = api_key or ("ollama" if provider == "ollama" else "")
+        if effective_key:
             from agent.llm_client import create_llm_client
 
             prompt = build_system_prompt(self._profile, self._dynamic, skill)
@@ -745,7 +775,7 @@ class MainWindow(QMainWindow):
             target_model = model or self._profile.get("model_name")
             new_client = create_llm_client(
                 provider=target_prov,
-                api_key=api_key,
+                api_key=effective_key,
                 model_name=target_model,
                 system_prompt=prompt,
             )

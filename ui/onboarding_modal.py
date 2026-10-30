@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 )
 
 from config.keyring_manager import (
+    check_ollama_status,
     fetch_available_models,
     get_api_key,
     save_api_key,
@@ -40,6 +41,7 @@ from config.keyring_manager import (
 from config.profile_manager import (
     DEFAULT_GEMINI_MODEL,
     DEFAULT_GROQ_MODEL,
+    DEFAULT_OLLAMA_MODEL,
     DEFAULT_PROVIDER,
     DEFAULT_SKILL_LEVEL,
     PROVIDER_MODELS,
@@ -66,6 +68,9 @@ SKILL_DESCRIPTIONS = {
 }
 
 
+_active_workers: set[_KeyTestWorker] = set()
+
+
 class _KeyTestWorker(QThread):
     """Background worker to test an API key and fetch available models."""
 
@@ -84,7 +89,9 @@ class _KeyTestWorker(QThread):
         self._model = model
 
     def run(self) -> None:
-        if self._provider == "groq":
+        if self._provider == "ollama":
+            valid, message = check_ollama_status()
+        elif self._provider == "groq":
             valid, message = test_groq_api_key(self._key, model=self._model)
         else:
             valid, message = test_api_key(self._key)
@@ -250,6 +257,7 @@ class OnboardingModal(QDialog):
         self._provider_combo = QComboBox(self)
         self._provider_combo.addItem("Groq (Fast / Free tier recommended)", "groq")
         self._provider_combo.addItem("Google Gemini", "gemini")
+        self._provider_combo.addItem("Ollama (Local / Offline)", "ollama")
         self._provider_combo.currentIndexChanged.connect(self._on_provider_changed)
         prov_row.addWidget(self._provider_combo, 1)
         key_layout.addLayout(prov_row)
@@ -354,7 +362,9 @@ class OnboardingModal(QDialog):
         self._on_skill_changed(saved_skill)
 
         saved_provider = self._profile.get("active_provider", DEFAULT_PROVIDER)
-        p_idx = 0 if saved_provider == "groq" else 1
+        p_idx = self._provider_combo.findData(saved_provider)
+        if p_idx < 0:
+            p_idx = 0
         self._provider_combo.setCurrentIndex(p_idx)
         self._on_provider_changed(p_idx)
 
@@ -387,6 +397,9 @@ class OnboardingModal(QDialog):
                 "gemini-2.0-flash",
                 "gemini-3.8-flash",
                 "qwen-2.5-coder-32b",
+                "qwen2.5-coder:7b",
+                "llama3.2:3b",
+                "mistral:7b",
             ]
             chosen = -1
             for pref in preferred_order:
@@ -409,27 +422,51 @@ class OnboardingModal(QDialog):
         models = PROVIDER_MODELS.get(provider, [])
         self._on_models_fetched(models)
 
-        if provider == "groq":
+        if provider == "ollama":
+            self._key_hint.setText("Running locally on http://127.0.0.1:11434")
+            self._key_input.setVisible(False)
+            self._key_input.setEnabled(False)
+            self._toggle_btn.setVisible(False)
+            self._test_btn.setText("Test Connection")
+            self._status_label.setText("")
+            # Automatically populate model dropdown with locally pulled models
+            self._on_fetch_models()
+        elif provider == "groq":
+            self._key_input.setVisible(True)
+            self._key_input.setEnabled(True)
+            self._toggle_btn.setVisible(True)
+            self._test_btn.setText("Test Key")
             self._key_hint.setText(
                 "Stored securely in your system keyring. Get a free high-speed API key at "
                 "<a href='https://console.groq.com/keys' style='color: #818cf8; text-decoration: none;'>console.groq.com/keys</a>."
             )
             self._key_input.setPlaceholderText("Paste your Groq API key (gsk_...)")
+            existing_key = get_api_key(provider)
+            if existing_key:
+                self._key_input.setText(existing_key)
+                self._status_label.setText(f"Key loaded from keyring for {provider.capitalize()}.")
+                self._status_label.setStyleSheet("color: #8b8d98; font-weight: 500;")
+            else:
+                self._key_input.clear()
+                self._status_label.setText("")
         else:
+            self._key_input.setVisible(True)
+            self._key_input.setEnabled(True)
+            self._toggle_btn.setVisible(True)
+            self._test_btn.setText("Test Key")
             self._key_hint.setText(
                 "Stored securely in your system keyring. Get a Gemini API key at "
                 "<a href='https://aistudio.google.com/apikey' style='color: #818cf8; text-decoration: none;'>aistudio.google.com/apikey</a>."
             )
             self._key_input.setPlaceholderText("Paste your Gemini API key (AIzaSy...)")
-
-        existing_key = get_api_key(provider)
-        if existing_key:
-            self._key_input.setText(existing_key)
-            self._status_label.setText(f"Key loaded from keyring for {provider.capitalize()}.")
-            self._status_label.setStyleSheet("color: #8b8d98; font-weight: 500;")
-        else:
-            self._key_input.clear()
-            self._status_label.setText("")
+            existing_key = get_api_key(provider)
+            if existing_key:
+                self._key_input.setText(existing_key)
+                self._status_label.setText(f"Key loaded from keyring for {provider.capitalize()}.")
+                self._status_label.setStyleSheet("color: #8b8d98; font-weight: 500;")
+            else:
+                self._key_input.clear()
+                self._status_label.setText("")
 
     @Slot(str)
     def _on_skill_changed(self, skill: str) -> None:
@@ -450,20 +487,27 @@ class OnboardingModal(QDialog):
         key = self._key_input.text().strip()
         provider = self._current_provider()
 
-        if not key:
+        if provider != "ollama" and not key:
             self._status_label.setText("⚠ Please enter an API key to fetch models.")
             self._status_label.setStyleSheet("color: #f59e0b; font-weight: 500;")
             return
 
         self._fetch_models_btn.setEnabled(False)
         self._test_btn.setEnabled(False)
-        self._status_label.setText(f"Fetching models from {provider.capitalize()}...")
+        if provider == "ollama":
+            self._status_label.setText("Fetching local models from Ollama...")
+        else:
+            self._status_label.setText(f"Fetching models from {provider.capitalize()}...")
         self._status_label.setStyleSheet("color: #818cf8; font-weight: 500;")
 
-        self._test_worker = _KeyTestWorker(provider=provider, key=key, model="", parent=self)
+        self._test_worker = _KeyTestWorker(
+            provider=provider, key=key or "ollama", model="", parent=None
+        )
+        _active_workers.add(self._test_worker)
         self._test_worker.result_ready.connect(self._on_test_result)
         self._test_worker.finished.connect(
-            lambda: (
+            lambda w=self._test_worker: (
+                _active_workers.discard(w),
                 self._fetch_models_btn.setEnabled(True),
                 self._test_btn.setEnabled(True),
             )
@@ -476,20 +520,27 @@ class OnboardingModal(QDialog):
         provider = self._current_provider()
         model = self.model_dropdown.currentText().strip()
 
-        if not key:
+        if provider != "ollama" and not key:
             self._status_label.setText("⚠ Please enter an API key to test.")
             self._status_label.setStyleSheet("color: #f59e0b; font-weight: 500;")
             return
 
         self._test_btn.setEnabled(False)
         self._fetch_models_btn.setEnabled(False)
-        self._status_label.setText(f"Testing key & fetching models for {provider.capitalize()}...")
+        if provider == "ollama":
+            self._status_label.setText("Testing connection to Ollama daemon...")
+        else:
+            self._status_label.setText(f"Testing key & fetching models for {provider.capitalize()}...")
         self._status_label.setStyleSheet("color: #818cf8; font-weight: 500;")
 
-        self._test_worker = _KeyTestWorker(provider=provider, key=key, model=model, parent=self)
+        self._test_worker = _KeyTestWorker(
+            provider=provider, key=key or "ollama", model=model, parent=None
+        )
+        _active_workers.add(self._test_worker)
         self._test_worker.result_ready.connect(self._on_test_result)
         self._test_worker.finished.connect(
-            lambda: (
+            lambda w=self._test_worker: (
+                _active_workers.discard(w),
                 self._test_btn.setEnabled(True),
                 self._fetch_models_btn.setEnabled(True),
             )
@@ -498,18 +549,28 @@ class OnboardingModal(QDialog):
 
     @Slot(bool, str, list)
     def _on_test_result(self, valid: bool, message: str, models: list[str]) -> None:
+        provider = self._current_provider()
         if valid:
             count_str = f" Retrieved {len(models)} models." if models else ""
-            self._status_label.setText(f"✓ Key verified successfully.{count_str}")
+            if provider == "ollama":
+                self._status_label.setText(f"✓ {message}.{count_str}")
+            else:
+                self._status_label.setText(f"✓ Key verified successfully.{count_str}")
             self._status_label.setStyleSheet("color: #10b981; font-weight: 600;")
             if models:
                 self._on_models_fetched(models)
         else:
-            clean_msg = message.split("\n")[0]
-            if len(clean_msg) > 90:
-                clean_msg = clean_msg[:87] + "..."
-            self._status_label.setText(f"✗ Failed: {clean_msg}")
-            self._status_label.setStyleSheet("color: #ef4444; font-weight: 500;")
+            if provider == "ollama":
+                self._status_label.setText(
+                    f"⚠ {message}. Run: systemctl start ollama or ollama serve"
+                )
+                self._status_label.setStyleSheet("color: #f59e0b; font-weight: 500;")
+            else:
+                clean_msg = message.split("\n")[0]
+                if len(clean_msg) > 90:
+                    clean_msg = clean_msg[:87] + "..."
+                self._status_label.setText(f"✗ Failed: {clean_msg}")
+                self._status_label.setStyleSheet("color: #ef4444; font-weight: 500;")
 
     def _save_settings(self) -> None:
         """Save settings using the model dropdown text."""
@@ -518,12 +579,16 @@ class OnboardingModal(QDialog):
         provider = self._current_provider()
         model = self.model_dropdown.currentText().strip()
 
-        if key:
+        if key and provider != "ollama":
             save_api_key(key, provider=provider)
 
-        update_provider_settings(provider, model_name=model)
-        update_skill_level(skill)
-        self.configuration_saved.emit(skill, key, provider, model)
+        try:
+            update_provider_settings(provider, model_name=model)
+            update_skill_level(skill)
+        except OSError:
+            pass
+        effective_key = key or ("ollama" if provider == "ollama" else "")
+        self.configuration_saved.emit(skill, effective_key, provider, model)
         self.accept()
 
     @Slot()

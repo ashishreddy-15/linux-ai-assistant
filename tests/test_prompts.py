@@ -97,6 +97,14 @@ class TestBuildSystemPrompt(unittest.TestCase):
             prompt = self._build(level)
             self.assertIn("inspect_manual", prompt)
 
+    def test_tool_execution_guidelines_present(self):
+        for level in VALID_SKILL_LEVELS:
+            prompt = self._build(level)
+            self.assertIn("Tool Execution Guidelines", prompt)
+            self.assertIn("Do NOT call `inspect_manual` for standard, common Linux commands", prompt)
+            self.assertIn("Only use `inspect_manual` if you need to look up non-standard flags", prompt)
+            self.assertIn("immediately propose the shell commands", prompt)
+
     def test_freedesktop_path_resolution_present(self):
         for level in VALID_SKILL_LEVELS:
             prompt = self._build(level)
