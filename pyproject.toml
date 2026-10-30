@@ -2,7 +2,7 @@
 name = "linux-ai-helper"
 version = "0.1.0"
 description = "A lightweight native Linux desktop GUI assistant"
-readme = "AGENTS.md"
+readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "PySide6>=6.5.0",
