@@ -26,6 +26,7 @@ from google import genai
 from google.genai import errors, types
 
 from agent.tools import AGENT_TOOLS, OPENAI_TOOLS
+from config.provider_registry import PROVIDER_CONFIGS
 
 logger = logging.getLogger(__name__)
 
@@ -35,23 +36,13 @@ OLLAMA_DEFAULT_MODEL = "qwen2.5-coder:7b"
 MODEL_ID = GEMINI_DEFAULT_MODEL
 
 FALLBACK_MODELS: Dict[str, List[str]] = {
-    "groq": [
-        "llama-3.3-70b-versatile",
-        "llama-3.1-8b-instant",
-        "qwen-2.5-coder-32b",
-    ],
-    "gemini": [
-        "gemini-3.8-flash",
-        "gemini-2.5-flash",
-        "gemini-2.0-flash",
-        "gemini-1.5-flash",
-    ],
-    "ollama": [
-        "qwen2.5-coder:7b",
-        "llama3.2:3b",
-        "mistral:7b",
-    ],
+    k: list(v.get("fallback_models", [])) for k, v in PROVIDER_CONFIGS.items()
 }
+FALLBACK_MODELS["ollama"] = [
+    "qwen2.5-coder:7b",
+    "llama3.2:3b",
+    "mistral:7b",
+]
 
 DEFAULT_TEMPERATURE = 0.1
 DEFAULT_MAX_OUTPUT_TOKENS = 8192
@@ -300,8 +291,8 @@ class GeminiAgentClient(BaseLLMClient):
         raise RuntimeError("generate() failed without returning a response or raising an exception.")
 
 
-class GroqAgentClient(BaseLLMClient):
-    """Synchronous adapter wrapping Groq/OpenAI-compatible chat completions."""
+class OpenAIAgentClient(BaseLLMClient):
+    """Synchronous adapter wrapping OpenAI-compatible chat completions."""
 
     def __init__(
         self,
@@ -309,6 +300,7 @@ class GroqAgentClient(BaseLLMClient):
         system_prompt: str,
         model: str = GROQ_DEFAULT_MODEL,
         base_url: str = "https://api.groq.com/openai/v1",
+        default_headers: Optional[Dict[str, str]] = None,
         temperature: float = DEFAULT_TEMPERATURE,
         max_retries: int = DEFAULT_MAX_RETRIES,
         initial_retry_delay: float = DEFAULT_INITIAL_RETRY_DELAY,
@@ -316,7 +308,18 @@ class GroqAgentClient(BaseLLMClient):
     ) -> None:
         from openai import OpenAI
 
-        self._client = OpenAI(base_url=base_url, api_key=api_key)
+        headers: Dict[str, str] = {}
+        if default_headers:
+            headers.update(default_headers)
+        if base_url and "openrouter.ai" in str(base_url):
+            headers.setdefault("HTTP-Referer", "https://github.com/linux-ai-assistant")
+            headers.setdefault("X-Title", "Linux AI Assistant")
+
+        self._client = OpenAI(
+            base_url=base_url,
+            api_key=api_key,
+            default_headers=headers if headers else None,
+        )
         self._system_prompt = system_prompt
         self._model = model
         self._temperature = temperature
@@ -334,20 +337,26 @@ class GroqAgentClient(BaseLLMClient):
         system_prompt: str,
         model: str = GROQ_DEFAULT_MODEL,
         temperature: float = DEFAULT_TEMPERATURE,
-    ) -> "GroqAgentClient":
-        """Create a GroqAgentClient reading the API key from the keyring."""
+        provider: str = "groq",
+    ) -> "OpenAIAgentClient":
+        """Create a client reading the API key from the keyring."""
         from config.keyring_manager import get_api_key
 
-        key = get_api_key("groq")
+        key = get_api_key(provider)
         if not key:
             raise RuntimeError(
-                "No Groq API key found in system keyring. "
+                f"No {provider.capitalize()} API key found in system keyring. "
                 "Please configure one via the onboarding dialog."
             )
+        base_url = (
+            PROVIDER_CONFIGS.get(provider, {}).get("base_url")
+            or "https://api.groq.com/openai/v1"
+        )
         return cls(
             api_key=key,
             system_prompt=system_prompt,
             model=model,
+            base_url=base_url,
             temperature=temperature,
         )
 
@@ -517,35 +526,63 @@ class GroqAgentClient(BaseLLMClient):
         raise RuntimeError("generate() failed without returning a response or raising an exception.")
 
 
-OpenAIAgentClient = GroqAgentClient
+GroqAgentClient = OpenAIAgentClient
 
 
 def create_llm_client(
     provider: str,
-    api_key: str,
+    api_key: str = "",
     model_name: Optional[str] = None,
     system_prompt: str = "",
+    **kwargs: Any,
 ) -> BaseLLMClient:
     """Factory creating an LLM client for the specified provider."""
     prov = (provider or "").strip().lower()
-    if prov == "groq":
-        model = model_name or GROQ_DEFAULT_MODEL
-        return GroqAgentClient(api_key=api_key, system_prompt=system_prompt, model=model)
+
+    if "api_key" in kwargs:
+        api_key = kwargs["api_key"]
+    if "model_name" in kwargs:
+        model_name = kwargs["model_name"]
+    elif "model" in kwargs:
+        model_name = kwargs["model"]
+
+    # Detect if positional arguments were passed as (provider, model_name, api_key)
+    if prov in PROVIDER_CONFIGS:
+        cfg = PROVIDER_CONFIGS[prov]
+        key_prefix = cfg.get("key_prefix")
+        if model_name and key_prefix and model_name.startswith(key_prefix) and not (api_key and api_key.startswith(key_prefix)):
+            api_key, model_name = model_name, api_key
+
+    if prov == "gemini":
+        cfg = PROVIDER_CONFIGS.get("gemini", {})
+        model = model_name or cfg.get("default_model", GEMINI_DEFAULT_MODEL)
+        return GeminiAgentClient(api_key=api_key, system_prompt=system_prompt, model=model)
+
     elif prov == "ollama":
         model = model_name or OLLAMA_DEFAULT_MODEL
         dummy_key = api_key or "ollama"
-        return GroqAgentClient(
+        return OpenAIAgentClient(
             api_key=dummy_key,
             system_prompt=system_prompt,
             model=model,
             base_url="http://127.0.0.1:11434/v1",
         )
-    elif prov == "gemini":
-        model = model_name or GEMINI_DEFAULT_MODEL
-        return GeminiAgentClient(api_key=api_key, system_prompt=system_prompt, model=model)
+
+    elif prov in PROVIDER_CONFIGS:
+        cfg = PROVIDER_CONFIGS[prov]
+        model = model_name or cfg.get("default_model", "")
+        base_url = cfg.get("base_url") or "https://api.groq.com/openai/v1"
+        return OpenAIAgentClient(
+            api_key=api_key,
+            system_prompt=system_prompt,
+            model=model,
+            base_url=base_url,
+        )
+
     else:
+        valid_list = list(PROVIDER_CONFIGS.keys()) + ["ollama"]
         raise ValueError(
-            f"Unknown provider '{provider}'. Must be 'groq', 'gemini', or 'ollama'."
+            f"Unknown provider '{provider}'. Must be one of {valid_list}."
         )
 
 
@@ -555,7 +592,7 @@ def fetch_available_models(provider: str, api_key: str = "") -> List[str]:
     Parameters
     ----------
     provider:
-        'groq', 'gemini', or 'ollama'
+        'groq', 'gemini', 'openrouter', 'cerebras', 'mistral', or 'ollama'
     api_key:
         Provider API key (optional for local providers like Ollama)
 
@@ -565,8 +602,12 @@ def fetch_available_models(provider: str, api_key: str = "") -> List[str]:
         List of available model IDs, falling back to sensible defaults on failure.
     """
     prov = (provider or "").strip().lower()
-    fallback = list(FALLBACK_MODELS.get(prov, []))
     cleaned_key = (api_key or "").strip()
+
+    if prov in PROVIDER_CONFIGS:
+        fallback = list(PROVIDER_CONFIGS[prov].get("fallback_models", []))
+    else:
+        fallback = list(FALLBACK_MODELS.get(prov, []))
 
     if prov != "ollama" and not cleaned_key:
         return fallback
@@ -604,47 +645,6 @@ def fetch_available_models(provider: str, api_key: str = "") -> List[str]:
             logger.warning("Failed to fetch Ollama models (%s); using fallbacks.", exc)
             return fallback
 
-    elif prov == "groq":
-        try:
-            from openai import OpenAI
-
-            client = OpenAI(
-                base_url="https://api.groq.com/openai/v1",
-                api_key=cleaned_key,
-            )
-            response = client.models.list()
-            raw_data = getattr(response, "data", response)
-            models_data = (
-                list(raw_data) if not isinstance(raw_data, (list, tuple)) else raw_data
-            )
-            non_chat_keywords = (
-                "whisper",
-                "audio",
-                "tts",
-                "embed",
-                "moderation",
-                "guard",
-            )
-            models: List[str] = []
-            for m in models_data:
-                model_id = getattr(m, "id", None)
-                if not model_id and isinstance(m, dict):
-                    model_id = m.get("id")
-                elif not model_id and isinstance(m, str):
-                    model_id = m
-                if not model_id or not isinstance(model_id, str):
-                    continue
-                if any(kw in model_id.lower() for kw in non_chat_keywords):
-                    continue
-                models.append(model_id)
-
-            if models:
-                seen = set()
-                deduped = [x for x in models if not (x in seen or seen.add(x))]
-                return deduped
-        except Exception as exc:
-            logger.warning("Failed to fetch Groq models (%s); using fallbacks.", exc)
-
     elif prov == "gemini":
         try:
             from google import genai
@@ -675,5 +675,64 @@ def fetch_available_models(provider: str, api_key: str = "") -> List[str]:
                 return deduped
         except Exception as exc:
             logger.warning("Failed to fetch Gemini models (%s); using fallbacks.", exc)
+
+    elif prov in PROVIDER_CONFIGS:
+        try:
+            from openai import OpenAI
+
+            cfg = PROVIDER_CONFIGS[prov]
+            base_url = cfg.get("base_url") or "https://api.groq.com/openai/v1"
+            headers = {}
+            if "openrouter.ai" in base_url:
+                headers["HTTP-Referer"] = "https://github.com/linux-ai-assistant"
+                headers["X-Title"] = "Linux AI Assistant"
+
+            client = OpenAI(
+                base_url=base_url,
+                api_key=cleaned_key,
+                default_headers=headers if headers else None,
+            )
+            response = client.models.list()
+            raw_data = getattr(response, "data", response)
+            models_data = (
+                list(raw_data) if not isinstance(raw_data, (list, tuple)) else raw_data
+            )
+            non_chat_keywords = (
+                "whisper",
+                "audio",
+                "tts",
+                "embed",
+                "moderation",
+                "guard",
+            )
+            models = []
+            for m in models_data:
+                model_id = getattr(m, "id", None)
+                if not model_id and isinstance(m, dict):
+                    model_id = m.get("id")
+                elif not model_id and isinstance(m, str):
+                    model_id = m
+                if not model_id or not isinstance(model_id, str):
+                    continue
+                if any(kw in model_id.lower() for kw in non_chat_keywords):
+                    continue
+                models.append(model_id)
+
+            # Specific filtering for OpenRouter: prioritize free-tier models ending with :free
+            if prov == "openrouter":
+                free_models = [m for m in models if m.endswith(":free") or ":free" in m]
+                if free_models:
+                    models = free_models
+
+            if models:
+                seen = set()
+                deduped = [x for x in models if not (x in seen or seen.add(x))]
+                return deduped
+        except Exception as exc:
+            logger.warning(
+                "Failed to fetch %s models (%s); using fallbacks.",
+                prov.capitalize(),
+                exc,
+            )
 
     return fallback

@@ -17,6 +17,7 @@ from agent.llm_client import (
     fetch_available_models,
     is_transient_error,
 )
+from config.provider_registry import PROVIDER_CONFIGS
 
 
 class TestTransientErrorClassification(unittest.TestCase):
@@ -317,6 +318,31 @@ class TestCreateLLMClientFactory(unittest.TestCase):
         self.assertIsInstance(client, (GroqAgentClient, OpenAIAgentClient))
         self.assertEqual(client._model, OLLAMA_DEFAULT_MODEL)
 
+    def test_create_openrouter_client(self):
+        client = create_llm_client("openrouter", "sk-or-v1-key")
+        self.assertIsInstance(client, OpenAIAgentClient)
+        self.assertEqual(client._model, PROVIDER_CONFIGS["openrouter"]["default_model"])
+        self.assertIn("openrouter.ai", str(client._client.base_url))
+
+    def test_create_cerebras_client(self):
+        client = create_llm_client("cerebras", "csk-key")
+        self.assertIsInstance(client, OpenAIAgentClient)
+        self.assertEqual(client._model, PROVIDER_CONFIGS["cerebras"]["default_model"])
+        self.assertIn("cerebras.ai", str(client._client.base_url))
+
+    def test_create_mistral_client(self):
+        client = create_llm_client("mistral", "mistral-key-1234567890123456789012")
+        self.assertIsInstance(client, OpenAIAgentClient)
+        self.assertEqual(client._model, PROVIDER_CONFIGS["mistral"]["default_model"])
+        self.assertIn("mistral.ai", str(client._client.base_url))
+
+    def test_create_all_five_providers_client_instantiation(self):
+        for provider in ("groq", "gemini", "openrouter", "cerebras", "mistral"):
+            client = create_llm_client(provider, "test-key-1234567890123456789012")
+            self.assertIsInstance(client, BaseLLMClient)
+            expected_model = PROVIDER_CONFIGS[provider]["default_model"]
+            self.assertEqual(client._model, expected_model)
+
     def test_create_invalid_provider_raises(self):
         with self.assertRaises(ValueError):
             create_llm_client("unknown_provider", "key")
@@ -372,12 +398,40 @@ class TestFetchAvailableModels(unittest.TestCase):
 
             models = fetch_available_models("gemini", "test-key")
             self.assertIsInstance(models, list)
-            self.assertIn("gemini-3.8-flash", models)
+            self.assertIn("gemini-2.5-flash", models)
 
     def test_fetch_models_empty_key_returns_fallback(self):
         models = fetch_available_models("groq", "")
         self.assertIsInstance(models, list)
         self.assertIn("llama-3.3-70b-versatile", models)
+
+    def test_fetch_models_none_or_empty_key_returns_fallback_all_providers(self):
+        for provider, config in PROVIDER_CONFIGS.items():
+            models_empty = fetch_available_models(provider, "")
+            self.assertEqual(models_empty, config["fallback_models"])
+
+            models_none = fetch_available_models(provider, None)
+            self.assertEqual(models_none, config["fallback_models"])
+
+    def test_fetch_openrouter_models_free_filtering(self):
+        with patch("openai.OpenAI") as mock_openai_cls:
+            mock_client = MagicMock()
+            mock_openai_cls.return_value = mock_client
+
+            m1 = MagicMock(id="meta-llama/llama-3.3-70b-instruct:free")
+            m2 = MagicMock(id="openai/gpt-4o")
+            m3 = MagicMock(id="qwen/qwen-2.5-coder-32b-instruct:free")
+            m4 = MagicMock(id="anthropic/claude-3.5-sonnet")
+            mock_client.models.list.return_value = MagicMock(data=[m1, m2, m3, m4])
+
+            models = fetch_available_models("openrouter", "sk-or-v1-valid-key-12345678901234")
+            self.assertEqual(
+                models,
+                [
+                    "meta-llama/llama-3.3-70b-instruct:free",
+                    "qwen/qwen-2.5-coder-32b-instruct:free",
+                ],
+            )
 
     def test_fetch_ollama_models_success(self):
         with patch("openai.OpenAI") as mock_openai_cls:

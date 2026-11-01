@@ -15,7 +15,7 @@ _app = QApplication.instance() or QApplication(sys.argv)
 from agent.orchestrator import AgentOrchestrator, OrchestratorState
 from ui.approval_card import ApprovalCard, _CollapsibleSection
 from ui.main_window import ChatBubble, MainWindow, StarterChipsWidget, strip_ansi
-from ui.onboarding_modal import OnboardingModal, SKILL_DESCRIPTIONS
+from ui.onboarding_modal import FREE_KEY_PROVIDERS, OnboardingModal, SKILL_DESCRIPTIONS
 
 
 class TestUIHelpers(unittest.TestCase):
@@ -167,9 +167,10 @@ class TestOnboardingModal(unittest.TestCase):
         self.assertIn("gsk_", modal._key_input.placeholderText())
 
         # Select Gemini
-        modal._provider_combo.setCurrentIndex(1)
+        idx_gemini = modal._provider_combo.findData("gemini")
+        modal._provider_combo.setCurrentIndex(idx_gemini)
         self.assertEqual(modal._current_provider(), "gemini")
-        self.assertIn("gemini-3.8-flash", [modal._model_combo.itemText(i) for i in range(modal._model_combo.count())])
+        self.assertIn("gemini-2.5-flash", [modal._model_combo.itemText(i) for i in range(modal._model_combo.count())])
         self.assertIn("AIzaSy", modal._key_input.placeholderText())
 
     def test_model_combo_editable_and_custom_entry(self):
@@ -287,6 +288,130 @@ class TestOnboardingModal(unittest.TestCase):
         self.assertIn("Desktop:", combined)
         self.assertIn("Hardware:", combined)
         self.assertNotIn("•", combined)
+
+    def test_free_key_providers_dictionary(self):
+        self.assertIn("gemini", FREE_KEY_PROVIDERS)
+        self.assertIn("groq", FREE_KEY_PROVIDERS)
+        self.assertIn("openrouter", FREE_KEY_PROVIDERS)
+        self.assertIn("cerebras", FREE_KEY_PROVIDERS)
+        self.assertIn("mistral", FREE_KEY_PROVIDERS)
+
+        self.assertEqual(FREE_KEY_PROVIDERS["gemini"]["url"], "https://aistudio.google.com/apikey")
+        self.assertIn("Google AI Studio", FREE_KEY_PROVIDERS["gemini"]["title"])
+        self.assertIn("Create API Key", FREE_KEY_PROVIDERS["gemini"]["steps"])
+
+        self.assertEqual(FREE_KEY_PROVIDERS["groq"]["url"], "https://console.groq.com/keys")
+        self.assertIn("Groq Cloud", FREE_KEY_PROVIDERS["groq"]["title"])
+        self.assertIn("gsk_", FREE_KEY_PROVIDERS["groq"]["steps"])
+
+        self.assertEqual(FREE_KEY_PROVIDERS["openrouter"]["url"], "https://openrouter.ai/keys")
+        self.assertIn("OpenRouter", FREE_KEY_PROVIDERS["openrouter"]["title"])
+        self.assertIn(":free", FREE_KEY_PROVIDERS["openrouter"]["steps"])
+
+        self.assertEqual(FREE_KEY_PROVIDERS["cerebras"]["url"], "https://cloud.cerebras.ai/")
+        self.assertIn("Cerebras", FREE_KEY_PROVIDERS["cerebras"]["title"])
+
+        self.assertEqual(FREE_KEY_PROVIDERS["mistral"]["url"], "https://console.mistral.ai/api-keys/")
+        self.assertIn("Mistral", FREE_KEY_PROVIDERS["mistral"]["title"])
+
+    def test_free_key_helper_ui_card_and_open_url(self):
+        modal = OnboardingModal()
+        modal.show()
+        _app.processEvents()
+        self.assertIsNotNone(modal._helper_card)
+        self.assertIn("background: #14161b", modal._helper_card.styleSheet())
+        self.assertIn("border: 1px solid #232630", modal._helper_card.styleSheet())
+
+        # Test all 5 providers update guidance card text and portal URL
+        providers_expected = [
+            ("groq", "Groq Cloud API Key (Free)", "https://console.groq.com/keys", "gsk_"),
+            ("gemini", "Google AI Studio API Key (Free)", "https://aistudio.google.com/apikey", "AIzaSy"),
+            ("openrouter", "OpenRouter Free Key", "https://openrouter.ai/keys", "sk-or-v1-"),
+            ("cerebras", "Cerebras Cloud API Key (Free)", "https://cloud.cerebras.ai/", "csk-"),
+            ("mistral", "Mistral La Plateforme Key (Free Experiment)", "https://console.mistral.ai/api-keys/", "API Keys"),
+        ]
+
+        for prov_id, expected_title, expected_url, step_fragment in providers_expected:
+            with self.subTest(provider=prov_id):
+                idx = modal._provider_combo.findData(prov_id)
+                self.assertGreaterEqual(idx, 0, f"Provider {prov_id} should exist in combo")
+                modal._provider_combo.setCurrentIndex(idx)
+                _app.processEvents()
+                self.assertFalse(modal._helper_card.isHidden())
+                self.assertTrue(modal._helper_card.isVisible())
+                self.assertIn(expected_title, modal._helper_title.text())
+                self.assertIn(step_fragment, modal._helper_steps.text())
+
+                with patch("PySide6.QtGui.QDesktopServices.openUrl") as mock_open:
+                    modal._helper_link_btn.click()
+                    mock_open.assert_called_once()
+                    called_url = mock_open.call_args[0][0].toString()
+                    self.assertEqual(called_url, expected_url)
+
+        # Test Ollama hides the helper card
+        idx_ollama = modal._provider_combo.findData("ollama")
+        modal._provider_combo.setCurrentIndex(idx_ollama)
+        _app.processEvents()
+        self.assertTrue(modal._helper_card.isHidden())
+        self.assertFalse(modal._helper_card.isVisible())
+
+    def test_key_format_validation_and_autofill(self):
+        modal = OnboardingModal()
+        modal.show()
+        _app.processEvents()
+        badge = modal._key_badge
+
+        # Groq key validation
+        idx_groq = modal._provider_combo.findData("groq")
+        modal._provider_combo.setCurrentIndex(idx_groq)
+
+        modal._key_input.setText("gsk_valid_groq_key_1234567890")
+        _app.processEvents()
+        self.assertFalse(badge.isHidden())
+        self.assertTrue(badge.isVisible())
+        self.assertIn("✓ Valid Key Format", badge.text())
+        self.assertIn("10b981", badge.styleSheet())
+
+        # Invalid key hides badge
+        modal._key_input.setText("random_invalid_key")
+        _app.processEvents()
+        self.assertTrue(badge.isHidden())
+        self.assertFalse(badge.isVisible())
+
+        # Empty key hides badge
+        modal._key_input.setText("")
+        _app.processEvents()
+        self.assertTrue(badge.isHidden())
+        self.assertFalse(badge.isVisible())
+
+        # Gemini key validation
+        idx_gemini = modal._provider_combo.findData("gemini")
+        modal._provider_combo.setCurrentIndex(idx_gemini)
+
+        modal._key_input.setText("AIzaSyValidGeminiKey678901234567")
+        _app.processEvents()
+        self.assertFalse(badge.isHidden())
+        self.assertTrue(badge.isVisible())
+        self.assertIn("✓ Valid Key Format", badge.text())
+        self.assertIn("10b981", badge.styleSheet())
+
+        # Autofill / auto-detect: pasting gsk_ while Gemini is active switches to Groq
+        modal._provider_combo.setCurrentIndex(idx_gemini)
+        self.assertEqual(modal._current_provider(), "gemini")
+        modal._key_input.setText("gsk_autofill_groq_switch_12345")
+        _app.processEvents()
+        self.assertEqual(modal._current_provider(), "groq")
+        self.assertFalse(badge.isHidden())
+        self.assertTrue(badge.isVisible())
+
+        # Autofill / auto-detect: pasting AIzaSy while Groq is active switches to Gemini
+        modal._provider_combo.setCurrentIndex(idx_groq)
+        self.assertEqual(modal._current_provider(), "groq")
+        modal._key_input.setText("AIzaSy_autofill_gemini_switch_1234")
+        _app.processEvents()
+        self.assertEqual(modal._current_provider(), "gemini")
+        self.assertFalse(badge.isHidden())
+        self.assertTrue(badge.isVisible())
 
 
 class TestMainWindow(unittest.TestCase):

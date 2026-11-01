@@ -14,6 +14,8 @@ import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from config.provider_registry import PROVIDER_CONFIGS
+
 CONFIG_DIR = Path.home() / ".config" / "linux-helper"
 DEFAULT_PROFILE_PATH = CONFIG_DIR / "system_profile.json"
 
@@ -25,27 +27,18 @@ VALID_SKILL_LEVELS = ("Beginner", "Intermediate", "Advanced")
 
 DEFAULT_PROVIDER = "groq"
 DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
-DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
+DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
 DEFAULT_OLLAMA_MODEL = "qwen2.5-coder:7b"
-VALID_PROVIDERS = ("groq", "gemini", "ollama")
+VALID_PROVIDERS = tuple(list(PROVIDER_CONFIGS.keys()) + ["ollama"])
+
 PROVIDER_MODELS = {
-    "groq": [
-        "llama-3.3-70b-versatile",
-        "llama-3.1-8b-instant",
-        "qwen-2.5-coder-32b",
-    ],
-    "gemini": [
-        "gemini-3.8-flash",
-        "gemini-2.5-flash",
-        "gemini-2.0-flash",
-        "gemini-1.5-flash",
-    ],
-    "ollama": [
-        "qwen2.5-coder:7b",
-        "llama3.2:3b",
-        "mistral:7b",
-    ],
+    k: list(v.get("fallback_models", [])) for k, v in PROVIDER_CONFIGS.items()
 }
+PROVIDER_MODELS["ollama"] = [
+    "qwen2.5-coder:7b",
+    "llama3.2:3b",
+    "mistral:7b",
+]
 
 
 def detect_os_release() -> Dict[str, str]:
@@ -220,12 +213,12 @@ def get_or_create_profile(
                 dirty = True
             if "model_name" not in existing:
                 prov = existing.get("active_provider")
-                if prov == "groq":
-                    default_model = DEFAULT_GROQ_MODEL
+                if prov in PROVIDER_CONFIGS:
+                    default_model = PROVIDER_CONFIGS[prov].get("default_model", DEFAULT_GROQ_MODEL)
                 elif prov == "ollama":
                     default_model = DEFAULT_OLLAMA_MODEL
                 else:
-                    default_model = DEFAULT_GEMINI_MODEL
+                    default_model = DEFAULT_GROQ_MODEL
                 existing["model_name"] = default_model
                 dirty = True
             if dirty:
@@ -265,12 +258,12 @@ def update_provider_settings(
         )
 
     if not model_name:
-        if provider_clean == "groq":
-            model_name = DEFAULT_GROQ_MODEL
+        if provider_clean in PROVIDER_CONFIGS:
+            model_name = PROVIDER_CONFIGS[provider_clean].get("default_model", DEFAULT_GROQ_MODEL)
         elif provider_clean == "ollama":
             model_name = DEFAULT_OLLAMA_MODEL
         else:
-            model_name = DEFAULT_GEMINI_MODEL
+            model_name = DEFAULT_GROQ_MODEL
 
     profile = get_or_create_profile(path)
     profile["active_provider"] = provider_clean

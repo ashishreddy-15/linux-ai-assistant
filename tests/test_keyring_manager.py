@@ -19,7 +19,10 @@ from config.keyring_manager import (
     save_api_key,
     test_api_key,
     test_groq_api_key,
+    test_provider_api_key,
+    validate_key_format,
 )
+from config.provider_registry import PROVIDER_CONFIGS
 
 
 class _MemoryKeyring(KeyringBackend):
@@ -162,6 +165,63 @@ class TestKeyringManager(unittest.TestCase):
 
     def test_ollama_key_name_for_provider(self):
         self.assertEqual(_key_name_for_provider("ollama"), OLLAMA_KEY_NAME)
+
+    def test_validate_key_format_all_five_providers(self):
+        test_cases = [
+            # provider, valid_key, invalid_prefix_key, short_key
+            ("groq", "gsk_" + "x" * 20, "invalid_prefix_" + "x" * 20, "gsk_short"),
+            ("gemini", "AIzaSy" + "y" * 22, "wrong_prefix_" + "y" * 22, "AIzaSy_123"),
+            ("openrouter", "sk-or-v1-" + "z" * 24, "sk-other-" + "z" * 24, "sk-or-v1-short"),
+            ("cerebras", "csk-" + "w" * 20, "c-wrong-" + "w" * 20, "csk-short"),
+            ("mistral", "m" * 32, None, "short_mistral"),
+        ]
+
+        for provider, valid_key, invalid_prefix, short_key in test_cases:
+            with self.subTest(provider=provider):
+                # Valid key should pass
+                self.assertTrue(
+                    validate_key_format(provider, valid_key),
+                    f"Valid key for {provider} should pass validation",
+                )
+
+                # Invalid prefix should fail (if provider enforces a prefix)
+                if invalid_prefix:
+                    self.assertFalse(
+                        validate_key_format(provider, invalid_prefix),
+                        f"Key with invalid prefix for {provider} should fail",
+                    )
+
+                # Short key should fail
+                self.assertFalse(
+                    validate_key_format(provider, short_key),
+                    f"Too-short key for {provider} should fail",
+                )
+
+                # Empty string and None should fail
+                self.assertFalse(validate_key_format(provider, ""))
+                self.assertFalse(validate_key_format(provider, "   "))
+                self.assertFalse(validate_key_format(provider, None))
+
+    def test_save_and_retrieve_all_five_providers(self):
+        sample_keys = {
+            "groq": "gsk_test_groq_key_1234567890",
+            "gemini": "AIzaSy_test_gemini_key_1234567890",
+            "openrouter": "sk-or-v1-test_openrouter_key_1234567890",
+            "cerebras": "csk-test_cerebras_key_1234567890",
+            "mistral": "mistral_test_key_12345678901234567890",
+        }
+
+        for provider, key in sample_keys.items():
+            with self.subTest(provider=provider):
+                # Test save_api_key(provider, key)
+                save_api_key(provider, key)
+                retrieved = get_api_key(provider)
+                self.assertEqual(retrieved, key)
+
+                # Test delete
+                deleted = delete_api_key(provider)
+                self.assertTrue(deleted)
+                self.assertIsNone(get_api_key(provider))
 
 
 if __name__ == "__main__":

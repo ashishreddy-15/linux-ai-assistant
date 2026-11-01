@@ -14,9 +14,11 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-from PySide6.QtCore import Qt, QThread, Signal, Slot
+from PySide6.QtCore import Qt, QThread, QUrl, Signal, Slot
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QComboBox,
+    QCommandLinkButton,
     QDialog,
     QFrame,
     QGridLayout,
@@ -30,6 +32,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from urllib.parse import urlparse
+
 from config.keyring_manager import (
     check_ollama_status,
     fetch_available_models,
@@ -37,6 +41,8 @@ from config.keyring_manager import (
     save_api_key,
     test_api_key,
     test_groq_api_key,
+    test_provider_api_key,
+    validate_key_format,
 )
 from config.profile_manager import (
     DEFAULT_GEMINI_MODEL,
@@ -51,6 +57,7 @@ from config.profile_manager import (
     update_provider_settings,
     update_skill_level,
 )
+from config.provider_registry import PROVIDER_CONFIGS
 
 SKILL_DESCRIPTIONS = {
     "Beginner": (
@@ -65,6 +72,18 @@ SKILL_DESCRIPTIONS = {
         "Compact technical summary. Editable command input box to tweak before "
         "approving. Full terminal log pane visible."
     ),
+}
+
+FREE_KEY_PROVIDERS: dict[str, dict[str, str]] = {
+    p: {
+        "title": cfg.get("guide_title", ""),
+        "url": cfg.get("portal_url", ""),
+        "steps": "\n".join(
+            step if step[:2].rstrip(".").isdigit() else f"{i+1}. {step}"
+            for i, step in enumerate(cfg.get("guide_steps", []))
+        ),
+    }
+    for p, cfg in PROVIDER_CONFIGS.items()
 }
 
 
@@ -89,12 +108,7 @@ class _KeyTestWorker(QThread):
         self._model = model
 
     def run(self) -> None:
-        if self._provider == "ollama":
-            valid, message = check_ollama_status()
-        elif self._provider == "groq":
-            valid, message = test_groq_api_key(self._key, model=self._model)
-        else:
-            valid, message = test_api_key(self._key)
+        valid, message = test_provider_api_key(self._provider, self._key, model=self._model)
 
         models: list[str] = []
         if valid:
@@ -255,12 +269,85 @@ class OnboardingModal(QDialog):
         prov_row.addWidget(prov_label)
 
         self._provider_combo = QComboBox(self)
-        self._provider_combo.addItem("Groq (Fast / Free tier recommended)", "groq")
-        self._provider_combo.addItem("Google Gemini", "gemini")
+        for prov_id, conf in PROVIDER_CONFIGS.items():
+            self._provider_combo.addItem(conf["display_name"], prov_id)
         self._provider_combo.addItem("Ollama (Local / Offline)", "ollama")
         self._provider_combo.currentIndexChanged.connect(self._on_provider_changed)
         prov_row.addWidget(self._provider_combo, 1)
         key_layout.addLayout(prov_row)
+
+        # ── Free API Key Helper Card (below Provider selection dropdown) ──
+        self._helper_card = QFrame(self)
+        self._helper_card.setObjectName("freeKeyHelperCard")
+        self._helper_card.setStyleSheet(
+            "QFrame#freeKeyHelperCard {"
+            "  background: #14161b;"
+            "  border: 1px solid #232630;"
+            "  border-radius: 8px;"
+            "  padding: 12px;"
+            "}"
+        )
+        self.helper_card = self._helper_card
+        helper_layout = QVBoxLayout(self._helper_card)
+        helper_layout.setContentsMargins(0, 0, 0, 0)
+        helper_layout.setSpacing(6)
+
+        helper_header = QHBoxLayout()
+        helper_header.setSpacing(8)
+
+        self._helper_title = QLabel("Free API Key Helper", self._helper_card)
+        self._helper_title.setStyleSheet(
+            "color: #ededed; font-size: 12px; font-weight: 600; background: transparent; border: none; padding: 0;"
+        )
+        self.helper_title = self._helper_title
+        helper_header.addWidget(self._helper_title)
+        helper_header.addStretch()
+
+        self._helper_link_btn = QCommandLinkButton("Get Free Key ↗", self._helper_card)
+        self._helper_link_btn.setObjectName("helperLinkButton")
+        self._helper_link_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._helper_link_btn.setStyleSheet(
+            "QCommandLinkButton {"
+            "  color: #818cf8;"
+            "  font-size: 11.5px;"
+            "  font-weight: 500;"
+            "  text-decoration: underline;"
+            "  border: none;"
+            "  background: transparent;"
+            "  padding: 0px;"
+            "  margin: 0px;"
+            "}"
+            "QCommandLinkButton:hover {"
+            "  color: #a5b4fc;"
+            "}"
+        )
+        self._helper_link_btn.clicked.connect(self._open_provider_key_url)
+        self.helper_link_btn = self._helper_link_btn
+        helper_header.addWidget(self._helper_link_btn)
+
+        helper_layout.addLayout(helper_header)
+
+        self._helper_steps = QLabel(self._helper_card)
+        self._helper_steps.setObjectName("helperStepsLabel")
+        self._helper_steps.setWordWrap(True)
+        self._helper_steps.setStyleSheet(
+            "color: #9e9e9e; font-size: 11.5px; line-height: 1.4; background: transparent; border: none; padding: 0;"
+        )
+        self.helper_steps = self._helper_steps
+        helper_layout.addWidget(self._helper_steps)
+
+        self._helper_url_label = QLabel(self._helper_card)
+        self._helper_url_label.setObjectName("helperUrlLabel")
+        self._helper_url_label.setTextFormat(Qt.TextFormat.RichText)
+        self._helper_url_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._helper_url_label.linkActivated.connect(lambda u: QDesktopServices.openUrl(QUrl(u)))
+        self._helper_url_label.setStyleSheet(
+            "color: #818cf8; font-size: 11px; text-decoration: underline; background: transparent; border: none; padding: 0;"
+        )
+        self.helper_url_label = self._helper_url_label
+        helper_layout.addWidget(self._helper_url_label)
+
+        key_layout.addWidget(self._helper_card)
 
         # Model Selector row
         model_row = QHBoxLayout()
@@ -294,13 +381,22 @@ class OnboardingModal(QDialog):
         self._key_hint.setOpenExternalLinks(True)
         key_layout.addWidget(self._key_hint)
 
-        # Key Input row with show/hide toggle
+        # Key Input row with show/hide toggle & format badge
         input_row = QHBoxLayout()
         input_row.setSpacing(8)
 
         self._key_input = QLineEdit(self)
         self._key_input.setEchoMode(QLineEdit.EchoMode.Password)
-        input_row.addWidget(self._key_input)
+        self._key_input.textChanged.connect(self._on_key_text_changed)
+        input_row.addWidget(self._key_input, 1)
+
+        self._key_badge = QLabel(self)
+        self._key_badge.setObjectName("keyValidationBadge")
+        self._key_badge.setVisible(False)
+        self.key_badge = self._key_badge
+        self._format_badge = self._key_badge
+        self._validation_badge = self._key_badge
+        input_row.addWidget(self._key_badge)
 
         self._toggle_btn = QToolButton(self)
         self._toggle_btn.setObjectName("headerGhostButton")
@@ -416,11 +512,100 @@ class OnboardingModal(QDialog):
         """Alias for _on_models_fetched."""
         self._on_models_fetched(models)
 
+    @Slot()
+    def _open_provider_key_url(self, url: str = "") -> None:
+        target_url = url or getattr(self, "_current_helper_url", "")
+        if not target_url:
+            info = FREE_KEY_PROVIDERS.get(self._current_provider())
+            if info:
+                target_url = info.get("url", "")
+        if target_url:
+            QDesktopServices.openUrl(QUrl(target_url))
+
+    def _update_helper_box(self, provider: str) -> None:
+        cfg = PROVIDER_CONFIGS.get(provider)
+        if cfg:
+            self._current_helper_url = cfg.get("portal_url", "")
+            self._helper_title.setText(cfg.get("guide_title", f"{cfg['display_name']} Key"))
+            netloc = urlparse(cfg["portal_url"]).netloc or cfg["portal_url"]
+            self._helper_link_btn.setText(f"↗ Get Free Key at {netloc}")
+            self._helper_link_btn.setToolTip(cfg["portal_url"])
+
+            steps = cfg.get("guide_steps", [])
+            steps_text = "\n".join(
+                step if step[:2].rstrip(".").isdigit() else f"{i+1}. {step}"
+                for i, step in enumerate(steps)
+            )
+            self._helper_steps.setText(steps_text)
+            if hasattr(self, "_helper_url_label"):
+                self._helper_url_label.setText(
+                    f"<a href='{cfg['portal_url']}' style='color: #818cf8; text-decoration: underline;'>{cfg['portal_url']}</a>"
+                )
+            self._helper_card.setVisible(True)
+        else:
+            self._current_helper_url = ""
+            self._helper_card.setVisible(False)
+
+    @Slot(str)
+    def _on_key_text_changed(self, text: str) -> None:
+        self._validate_key_format()
+
+    def _validate_key_format(self) -> None:
+        provider = self._current_provider()
+        key = self._key_input.text().strip()
+
+        if not key or provider == "ollama":
+            self._key_badge.setVisible(False)
+            self._key_badge.setText("")
+            return
+
+        # Autofill / auto-detect provider if key prefix uniquely identifies provider
+        for p_name, conf in PROVIDER_CONFIGS.items():
+            prefix = conf.get("key_prefix")
+            if prefix and key.startswith(prefix) and provider != p_name:
+                idx = self._provider_combo.findData(p_name)
+                if idx >= 0:
+                    self._auto_switching_provider = True
+                    try:
+                        self._provider_combo.setCurrentIndex(idx)
+                        self._key_input.setText(key)
+                    finally:
+                        self._auto_switching_provider = False
+                    self._validate_key_format()
+                    return
+
+        # Check format badge display for active provider
+        if validate_key_format(provider, key):
+            self._key_badge.setText("✓ Valid Key Format")
+            self._key_badge.setStyleSheet(
+                "color: #10b981; background-color: rgba(16, 185, 129, 0.15); "
+                "border: 1px solid rgba(16, 185, 129, 0.35); border-radius: 4px; "
+                "padding: 2px 8px; font-size: 11px; font-weight: 600;"
+            )
+            self._key_badge.setVisible(True)
+        else:
+            self._key_badge.setVisible(False)
+            self._key_badge.setText("")
+
     @Slot(int)
     def _on_provider_changed(self, index: int) -> None:
         provider = self._current_provider()
-        models = PROVIDER_MODELS.get(provider, [])
-        self._on_models_fetched(models)
+        cfg = PROVIDER_CONFIGS.get(provider)
+        if cfg:
+            models = list(cfg.get("fallback_models", []))
+            self._on_models_fetched(models)
+            default_m = cfg.get("default_model")
+            if default_m:
+                m_idx = self.model_dropdown.findText(default_m)
+                if m_idx >= 0:
+                    self.model_dropdown.setCurrentIndex(m_idx)
+                else:
+                    self.model_dropdown.setEditText(default_m)
+        else:
+            models = PROVIDER_MODELS.get(provider, [])
+            self._on_models_fetched(models)
+
+        self._update_helper_box(provider)
 
         if provider == "ollama":
             self._key_hint.setText("Running locally on http://127.0.0.1:11434")
@@ -429,44 +614,32 @@ class OnboardingModal(QDialog):
             self._toggle_btn.setVisible(False)
             self._test_btn.setText("Test Connection")
             self._status_label.setText("")
+            self._validate_key_format()
             # Automatically populate model dropdown with locally pulled models
             self._on_fetch_models()
-        elif provider == "groq":
+        elif cfg:
             self._key_input.setVisible(True)
             self._key_input.setEnabled(True)
             self._toggle_btn.setVisible(True)
             self._test_btn.setText("Test Key")
+            portal_url = cfg.get("portal_url", "")
             self._key_hint.setText(
-                "Stored securely in your system keyring. Get a free high-speed API key at "
-                "<a href='https://console.groq.com/keys' style='color: #818cf8; text-decoration: none;'>console.groq.com/keys</a>."
+                f"Stored securely in your system keyring. Get a free API key at "
+                f"<a href='{portal_url}' style='color: #818cf8; text-decoration: none;'>{portal_url}</a>."
             )
-            self._key_input.setPlaceholderText("Paste your Groq API key (gsk_...)")
-            existing_key = get_api_key(provider)
-            if existing_key:
-                self._key_input.setText(existing_key)
-                self._status_label.setText(f"Key loaded from keyring for {provider.capitalize()}.")
-                self._status_label.setStyleSheet("color: #8b8d98; font-weight: 500;")
-            else:
-                self._key_input.clear()
-                self._status_label.setText("")
-        else:
-            self._key_input.setVisible(True)
-            self._key_input.setEnabled(True)
-            self._toggle_btn.setVisible(True)
-            self._test_btn.setText("Test Key")
-            self._key_hint.setText(
-                "Stored securely in your system keyring. Get a Gemini API key at "
-                "<a href='https://aistudio.google.com/apikey' style='color: #818cf8; text-decoration: none;'>aistudio.google.com/apikey</a>."
-            )
-            self._key_input.setPlaceholderText("Paste your Gemini API key (AIzaSy...)")
-            existing_key = get_api_key(provider)
-            if existing_key:
-                self._key_input.setText(existing_key)
-                self._status_label.setText(f"Key loaded from keyring for {provider.capitalize()}.")
-                self._status_label.setStyleSheet("color: #8b8d98; font-weight: 500;")
-            else:
-                self._key_input.clear()
-                self._status_label.setText("")
+            prefix = cfg.get("key_prefix")
+            prefix_hint = f" ({prefix}...)" if prefix else ""
+            self._key_input.setPlaceholderText(f"Paste your {cfg['display_name']} key{prefix_hint}")
+            if not getattr(self, "_auto_switching_provider", False):
+                existing_key = get_api_key(provider)
+                if existing_key:
+                    self._key_input.setText(existing_key)
+                    self._status_label.setText(f"Key loaded from keyring for {provider.capitalize()}.")
+                    self._status_label.setStyleSheet("color: #8b8d98; font-weight: 500;")
+                else:
+                    self._key_input.clear()
+                    self._status_label.setText("")
+            self._validate_key_format()
 
     @Slot(str)
     def _on_skill_changed(self, skill: str) -> None:
