@@ -11,10 +11,15 @@ Designed specifically for Linux power users and beginners alike, it manages syst
 - **Strict Human-in-the-Loop (HITL) Invariant**: The assistant **never** executes mutating shell commands or modifies system files without explicit user review and approval via interactive approval cards.
 - **Pure Native Qt6 Performance**: Zero Electron, zero webviews, zero heavy browser runtimes. Runs on a fast, resource-efficient PySide6 interface.
 - **Obsidian / Raycast Dark Aesthetic**: Crafted with an ultra-clean neutral dark theme (`#080808` canvas, `#121212` surfaces, `#10b981` emerald accents, vector SVG controls) and a centered reading column.
-- **Multi-Provider Engine**:
-  - **Groq** (via `openai` SDK): Ultra-fast inference with models such as `llama-3.3-70b-versatile`, `qwen-2.5-coder-32b`, and `llama-3.1-8b-instant`.
-  - **Google Gemini** (via `google-genai` SDK): Robust reasoning with exponential backoff and automatic retry on transient rate limits / 503s.
-- **Dynamic Model Discovery**: Fetches active chat-capable models directly from provider APIs using the stored API key, with intelligent fallbacks.
+- **Comprehensive Multi-Provider Engine**:
+  - **Groq Cloud** (Ultra-Fast Free Tier): High-speed inference using `llama-3.3-70b-versatile`, `qwen-2.5-32b`, and `llama-3.1-8b-instant`.
+  - **Google Gemini** (AI Studio Free Tier): Robust reasoning with `gemini-2.5-flash` and `gemini-1.5-flash` with exponential backoff on transient errors.
+  - **OpenRouter** (Free Open-Weight Models): Access to free models including `meta-llama/llama-3.3-70b-instruct:free`, `qwen/qwen-2.5-coder-32b-instruct:free`, and `mistralai/mistral-small-24b-instruct-2501:free`.
+  - **Cerebras Inference** (Ultra-Fast Free Llama 3.3): Instant inference with `llama-3.3-70b` and `llama3.1-8b`.
+  - **Mistral AI** (La Plateforme Free Experiment): Access to `mistral-small-latest`, `codestral-latest`, and `mistral-large-latest`.
+  - **Ollama** (Local / Offline Private Execution): Complete offline privacy powered by local models such as `qwen2.5-coder:7b`, `llama3.2:3b`, and `mistral:7b` via `http://127.0.0.1:11434`.
+- **Integrated Free API Key Helper**: Built-in interactive guidance card with direct portal links (`[ ↗ Get Free Key at <domain> ]`), numbered registration steps, live key format validation badges (`✓ Valid Key Format`), and provider auto-detection on paste.
+- **Dynamic Model Discovery**: Fetches active chat-capable models dynamically from provider APIs or local Ollama instances, with fallback models when offline.
 - **Secure Key Storage**: API keys are securely stored and retrieved using the native Linux system keyring (`secret-service` / FreeDesktop Secret Service API).
 - **Rootless Preference**: Defaults to user-space standards (`~/.local/opt`, `~/.local/bin`, `~/.local/share/applications`) so `sudo` is unnecessary for desktop applications.
 - **Freeze-Proof Graphical Authentication**: Intercepts `sudo` prompts and routes root actions through `pkexec` or custom desktop askpass handlers, preventing terminal freeze on non-interactive `stdin`.
@@ -40,6 +45,7 @@ The interface adapts dynamically based on the user's chosen expertise mode:
 - **Collapsible Terminal Drawer**: A vertical drawer containing real-time ANSI-stripped stdout/stderr logs. Auto-expands to 180px during command execution and collapses with a single click.
 - **Starter Chips**: One-click prompt suggestions on empty chat states covering Software Setup, Hardware & Drivers, System Settings, Network & DNS, and System Health.
 - **Interactive Approval Cards**: Highlighting command risk levels, parameter diffs, and irreversible command warnings.
+- **Quick-Start Guidance Card**: Modern Raycast-styled surface card below the Provider dropdown guiding users through free key registration, live credential testing, and local daemon status checks.
 
 ---
 
@@ -47,27 +53,28 @@ The interface adapts dynamically based on the user's chosen expertise mode:
 
 ```
 linux-ai-assistant/
-├── main.py                  # Application entry point & stylesheet loader
-├── pyproject.toml           # Project dependencies & build metadata
-├── AGENTS.md                # Invariant specifications & engineering rules
+├── main.py                     # Application entry point & stylesheet loader
+├── pyproject.toml              # Project dependencies & build metadata
+├── AGENTS.md                   # Invariant specifications & engineering rules
 ├── config/
-│   ├── keyring_manager.py   # Secure key management via Linux system keyring
-│   └── profile_manager.py   # Hardware, OS, package manager, and desktop inspection
+│   ├── provider_registry.py    # Centralized registry for all cloud & local providers
+│   ├── keyring_manager.py      # Secure key management via Linux system keyring
+│   └── profile_manager.py      # Hardware, OS, package manager, and desktop inspection
 ├── agent/
-│   ├── llm_client.py        # Multi-provider client adapter (Groq & Gemini) with retries
-│   ├── orchestrator.py      # HITL state machine coordinating LLM and PTY execution
-│   ├── prompts.py           # Domain system prompts tailored to skill levels
-│   └── tools.py             # Declarations for shell proposals, desktop files & manual lookup
+│   ├── llm_client.py           # Unified client architecture (OpenAIAgentClient & GeminiAgentClient)
+│   ├── orchestrator.py         # HITL state machine coordinating LLM and PTY execution
+│   ├── prompts.py              # Domain system prompts tailored to skill levels
+│   └── tools.py                # Declarations for shell proposals, desktop files & manual lookup
 ├── executor/
-│   ├── askpass.py           # Graphical sudo / pkexec credential handler
-│   └── pty_runner.py        # Pseudo-terminal runner streaming stdout/stderr
+│   ├── askpass.py              # Graphical sudo / pkexec credential handler
+│   └── pty_runner.py           # Pseudo-terminal runner streaming stdout/stderr
 ├── ui/
-│   ├── main_window.py       # Centered chat stream & collapsible terminal drawer
-│   ├── onboarding_modal.py  # First-run setup (system preview, provider, API key)
-│   ├── approval_card.py     # Adaptive Approve / Edit / Reject card widget
-│   ├── theme.qss            # Pure neutral dark stylesheet
-│   └── *.svg                # Crisp vector icons (terminal, settings, chevron)
-└── tests/                   # Complete test suite (200+ unit & integration tests)
+│   ├── main_window.py          # Centered chat stream & collapsible terminal drawer
+│   ├── onboarding_modal.py     # Settings / setup modal with Free Key Helper & validation
+│   ├── approval_card.py        # Adaptive Approve / Edit / Reject card widget
+│   ├── theme.qss               # Pure neutral dark stylesheet
+│   └── *.svg                   # Crisp vector icons (terminal, settings, chevron)
+└── tests/                      # Full test suite (220+ unit & integration tests)
 ```
 
 ---
@@ -79,6 +86,7 @@ linux-ai-assistant/
 - Linux (Arch, Fedora, Debian/Ubuntu, openSUSE, etc.)
 - Python 3.11+
 - System Keyring daemon (`gnome-keyring`, `ksecretsservice`, or `keepassxc`)
+- *(Optional)* [Ollama](https://ollama.com/) for fully local, offline inference
 
 ### 2. Clone the Repository
 
@@ -116,13 +124,18 @@ Launch the assistant:
 python3 main.py
 ```
 
-### First Launch (Onboarding)
-On first launch, the Onboarding modal will appear:
+### First Launch (Onboarding & Configuration)
+On first launch, or when clicking **Settings**:
 1. Review your detected system environment (OS, kernel, package manager, desktop session, RAM, disk space).
 2. Choose your preferred **Skill Level** (`Beginner`, `Intermediate`, or `Advanced`).
-3. Select your **AI Provider** (`Groq` or `Google Gemini`).
-4. Enter your API Key and click **Test Key** (models will be dynamically fetched and populated in the dropdown).
-5. Click **Save & Continue**.
+3. Select your **Provider**:
+   - **Cloud Providers**: Groq, Google Gemini, OpenRouter, Cerebras, or Mistral.
+     - View step-by-step instructions and click `[ ↗ Get Free Key at <domain> ]` to acquire an API key without documentation hunting.
+     - Paste your API key; valid formats display an emerald `✓ Valid Key Format` badge.
+     - Click **Test Key** to verify credentials and fetch available models dynamically.
+   - **Local LLM**: Select **Ollama (Local / Offline)**.
+     - Click **Test Connection** to verify your local daemon status (`http://127.0.0.1:11434`) and populate locally pulled models.
+4. Click **Save & Continue**.
 
 ### Command Line System Diagnostics
 To run a standalone CLI inspection without launching the GUI:
@@ -135,19 +148,20 @@ python3 main.py --inspect
 
 ## Running the Test Suite
 
-The project includes unit and integration tests covering the PTY runner, tool execution, keyring storage, multi-provider LLM adapters, orchestrator state transitions, and UI widgets:
+The project includes extensive test coverage across the PTY runner, tool execution, keyring storage, multi-provider LLM adapters, orchestrator state transitions, and UI widgets:
 
 ```bash
-.venv/bin/python3 -m unittest discover -s tests -v
+QT_QPA_PLATFORM=offscreen .venv/bin/python3 -m unittest discover -s tests -v
 ```
 
 ---
 
 ## Security & Privacy
 
-- **API Keys**: Stored in the encrypted Linux system keyring via FreeDesktop Secret Service API. Keys are never saved to plain-text configuration files or disk logs.
+- **Encrypted Key Storage**: API keys are stored in the encrypted Linux system keyring via FreeDesktop Secret Service API. Keys are never saved to plain-text configuration files or disk logs.
+- **Local & Offline Option**: With Ollama support, you can run prompts and diagnostic workflows 100% locally on your machine with zero external network traffic.
 - **Zero Silent Mutations**: All mutating operations (`propose_shell_command`, `create_desktop_entry`) pause execution and require explicit approval.
-- **Sandboxed Execution**: Inspect commands (`inspect_manual`, `read_file_snippet`) run with strict bounds and truncation to prevent token flooding or unauthorized writes.
+- **Sandboxed Inspection**: Inspect commands (`inspect_manual`, `read_file_snippet`) run with strict bounds and truncation to prevent token flooding or unauthorized writes.
 
 ---
 
