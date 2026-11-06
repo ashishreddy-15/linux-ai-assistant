@@ -15,6 +15,7 @@ from agent.tools import (
     execute_inspect_manual,
     execute_read_file_snippet,
     inspect_manual,
+    normalize_tool_args,
     render_desktop_entry,
 )
 from google.genai import types
@@ -316,6 +317,53 @@ class TestExecuteInspectManual(unittest.TestCase):
             ):
                 result = execute_inspect_manual("slow_helper")
                 self.assertIn("ERROR: Help command for 'slow_helper' timed out after 5s.", result)
+
+
+class TestNormalizeToolArgs(unittest.TestCase):
+    """Verify tool argument normalization and alias resolution."""
+
+    def test_inspect_manual_with_canonical_arg(self):
+        res = normalize_tool_args("inspect_manual", {"command_or_topic": "dnf"})
+        self.assertEqual(res["command_or_topic"], "dnf")
+
+    def test_inspect_manual_with_command_alias(self):
+        res = normalize_tool_args("inspect_manual", {"command": "systemctl"})
+        self.assertEqual(res["command_or_topic"], "systemctl")
+
+    def test_inspect_manual_with_topic_alias(self):
+        res = normalize_tool_args("inspect_manual", {"topic": "nmcli"})
+        self.assertEqual(res["command_or_topic"], "nmcli")
+
+    def test_inspect_manual_empty_defaults_to_bash(self):
+        res = normalize_tool_args("inspect_manual", {})
+        self.assertEqual(res["command_or_topic"], "bash")
+
+    def test_read_file_snippet_with_canonical_arg(self):
+        res = normalize_tool_args("read_file_snippet", {"file_path": "/etc/os-release", "max_lines": 50})
+        self.assertEqual(res["file_path"], "/etc/os-release")
+        self.assertEqual(res["max_lines"], 50)
+
+    def test_read_file_snippet_with_path_alias_and_default_max_lines(self):
+        res = normalize_tool_args("read_file_snippet", {"path": "/etc/fstab"})
+        self.assertEqual(res["file_path"], "/etc/fstab")
+        self.assertEqual(res["max_lines"], 100)
+
+    def test_propose_shell_command_aliases_and_defaults(self):
+        res = normalize_tool_args(
+            "propose_shell_command",
+            {"cmd": "dnf check-update", "desc": "Check updates", "root": True},
+        )
+        self.assertEqual(res["command"], "dnf check-update")
+        self.assertEqual(res["explanation"], "Check updates")
+        self.assertTrue(res["requires_root"])
+
+    def test_create_desktop_entry_field_defaults(self):
+        res = normalize_tool_args("create_desktop_entry", {"name": "TestApp", "exec": "/bin/test"})
+        self.assertEqual(res["app_name"], "TestApp")
+        self.assertEqual(res["exec_path"], "/bin/test")
+        self.assertEqual(res["icon_path"], "")
+        self.assertEqual(res["categories"], "")
+        self.assertEqual(res["comment"], "")
 
 
 if __name__ == "__main__":

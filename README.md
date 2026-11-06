@@ -1,6 +1,6 @@
 # Linux AI Assistant
 
-A lightweight, native Linux desktop assistant built with **Python** and **PySide6 (Qt6)**. It pairs modern LLM reasoning with a strict **Human-in-the-Loop (HITL)** approval safety architecture, dynamic system environment inspection, and a live streaming pseudo-terminal (PTY) drawer.
+A lightweight, native Linux desktop assistant built with **Python** and **pywebview (WebKitGTK)**. It pairs modern LLM reasoning with a strict **Human-in-the-Loop (HITL)** approval safety architecture, dynamic system environment inspection, and a live streaming pseudo-terminal (PTY) drawer.
 
 Designed specifically for Linux power users and beginners alike, it manages system configuration, software installations, tarball extraction, `.desktop` launcher creation, and system diagnostics without requiring elevated privileges whenever possible.
 
@@ -9,8 +9,8 @@ Designed specifically for Linux power users and beginners alike, it manages syst
 ## Key Highlights
 
 - **Strict Human-in-the-Loop (HITL) Invariant**: The assistant **never** executes mutating shell commands or modifies system files without explicit user review and approval via interactive approval cards.
-- **Pure Native Qt6 Performance**: Zero Electron, zero webviews, zero heavy browser runtimes. Runs on a fast, resource-efficient PySide6 interface.
-- **Obsidian / Raycast Dark Aesthetic**: Crafted with an ultra-clean neutral dark theme (`#080808` canvas, `#121212` surfaces, `#10b981` emerald accents, vector SVG controls) and a centered reading column.
+- **Lightweight Native Desktop Experience**: Zero Electron, zero heavy Qt framework downloads. Uses the Linux system's native **WebKitGTK 4.1** runtime via `pywebview`.
+- **Obsidian / Raycast Dark Aesthetic**: Crafted with an ultra-clean neutral dark theme (`#09090b` canvas, `#121215` surfaces, `#10b981` emerald accents) and a centered reading column.
 - **Comprehensive Multi-Provider Engine**:
   - **Groq Cloud** (Ultra-Fast Free Tier): High-speed inference using `llama-3.3-70b-versatile`, `qwen-2.5-32b`, and `llama-3.1-8b-instant`.
   - **Google Gemini** (AI Studio Free Tier): Robust reasoning with `gemini-2.5-flash` and `gemini-1.5-flash` with exponential backoff on transient errors.
@@ -53,7 +53,7 @@ The interface adapts dynamically based on the user's chosen expertise mode:
 
 ```
 linux-ai-assistant/
-├── main.py                     # Application entry point & stylesheet loader
+├── main.py                     # Application entry point & pywebview window loader
 ├── pyproject.toml              # Project dependencies & build metadata
 ├── AGENTS.md                   # Invariant specifications & engineering rules
 ├── config/
@@ -61,20 +61,20 @@ linux-ai-assistant/
 │   ├── keyring_manager.py      # Secure key management via Linux system keyring
 │   └── profile_manager.py      # Hardware, OS, package manager, and desktop inspection
 ├── agent/
+│   ├── events.py               # Pure-Python Signal/Slot event dispatcher
 │   ├── llm_client.py           # Unified client architecture (OpenAIAgentClient & GeminiAgentClient)
 │   ├── orchestrator.py         # HITL state machine coordinating LLM and PTY execution
 │   ├── prompts.py              # Domain system prompts tailored to skill levels
 │   └── tools.py                # Declarations for shell proposals, desktop files & manual lookup
 ├── executor/
-│   ├── askpass.py              # Graphical sudo / pkexec credential handler
+│   ├── askpass.py              # Graphical sudo / pkexec credential handler (zenity / kdialog)
 │   └── pty_runner.py           # Pseudo-terminal runner streaming stdout/stderr
 ├── ui/
-│   ├── main_window.py          # Centered chat stream & collapsible terminal drawer
-│   ├── onboarding_modal.py     # Settings / setup modal with Free Key Helper & validation
-│   ├── approval_card.py        # Adaptive Approve / Edit / Reject card widget
-│   ├── theme.qss               # Pure neutral dark stylesheet
-│   └── *.svg                   # Crisp vector icons (terminal, settings, chevron)
-└── tests/                      # Full test suite (220+ unit & integration tests)
+│   ├── bridge.py               # Python ↔ JavaScript bidirectional API bridge
+│   ├── index.html              # Desktop client window layout with chat & terminal drawer
+│   ├── app.css                 # Clean neutral dark stylesheet
+│   └── app.js                  # Frontend event dispatch, ANSI parser & markdown renderer
+└── tests/                      # Full test suite (210+ unit & integration tests)
 ```
 
 ---
@@ -84,7 +84,12 @@ linux-ai-assistant/
 ### 1. Prerequisites
 
 - Linux (Arch, Fedora, Debian/Ubuntu, openSUSE, etc.)
-- Python 3.11+
+- Python 3.11+ (or let `uv` manage Python versions automatically)
+- System GTK & WebKitGTK runtime (already installed on most desktop distributions):
+  - **Fedora**: `sudo dnf install python3-gobject webkit2gtk4.1`
+  - **Debian / Ubuntu**: `sudo apt install python3-gi python3-gi-cairo gir1.2-webkit2-4.1`
+  - **Arch Linux**: `sudo pacman -S python-gobject webkit2gtk-4.1`
+- [`uv`](https://github.com/astral-sh/uv) (recommended) or Python `venv` + `pip`
 - System Keyring daemon (`gnome-keyring`, `ksecretsservice`, or `keepassxc`)
 - *(Optional)* [Ollama](https://ollama.com/) for fully local, offline inference
 
@@ -95,21 +100,26 @@ git clone git@github.com:ashishreddy-15/linux-ai-assistant.git
 cd linux-ai-assistant
 ```
 
-### 3. Create a Virtual Environment
+### 3. Environment & Dependency Setup
+
+#### Using `uv` (Fast & Recommended)
+
+Synchronize the virtual environment and install all dependencies in one command:
+
+```bash
+uv sync
+```
+
+#### Alternatively, Using Traditional `venv`
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-```
-
-### 4. Install Dependencies
-
-```bash
 pip install -e .
 ```
 
 Dependencies include:
-- `PySide6>=6.5.0`
+- `pywebview>=6.2.1`
 - `openai>=1.0.0`
 - `google-genai>=0.1.0`
 - `keyring>=24.0.0`
@@ -121,6 +131,10 @@ Dependencies include:
 Launch the assistant:
 
 ```bash
+# Using uv:
+uv run python main.py
+
+# Or directly if .venv is activated:
 python3 main.py
 ```
 
@@ -148,10 +162,14 @@ python3 main.py --inspect
 
 ## Running the Test Suite
 
-The project includes extensive test coverage across the PTY runner, tool execution, keyring storage, multi-provider LLM adapters, orchestrator state transitions, and UI widgets:
+The project includes extensive test coverage across the PTY runner, tool execution, keyring storage, multi-provider LLM adapters, orchestrator state transitions, and UI assets:
 
 ```bash
-QT_QPA_PLATFORM=offscreen .venv/bin/python3 -m unittest discover -s tests -v
+# Using uv:
+uv run python -m unittest discover -s tests -v
+
+# Or directly with an activated .venv:
+python3 -m unittest discover -s tests -v
 ```
 
 ---

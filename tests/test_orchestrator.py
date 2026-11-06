@@ -10,12 +10,6 @@ import unittest
 from typing import Any
 from unittest.mock import MagicMock, patch, PropertyMock
 
-from PySide6.QtWidgets import QApplication
-import sys
-
-# Ensure a QApplication exists for Signal/Slot and widget machinery across test runner
-_app = QApplication.instance() or QApplication(sys.argv)
-
 from google.genai import types
 
 from agent.orchestrator import AgentOrchestrator, OrchestratorState

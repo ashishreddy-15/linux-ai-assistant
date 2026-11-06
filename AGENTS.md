@@ -1,14 +1,15 @@
 # Project Architecture & Rules: Linux AI Assistant
 
 ## 1. Overview
-A lightweight native Linux desktop GUI assistant built with Python and PySide6 (Qt6). It assists users in installing packages, running diagnostics, and unpacking tarball applications (such as Postman) via an LLM with a strict Human-in-the-Loop (HITL) approval step and a live terminal log stream.
+A lightweight native Linux desktop GUI assistant built with Python and pywebview (WebKitGTK). It assists users in installing packages, running diagnostics, and unpacking tarball applications (such as Postman) via an LLM with a strict Human-in-the-Loop (HITL) approval step and a live terminal log stream.
 
 ## 2. Tech Stack & Dependencies
-- Language: Python 3.11+
-- GUI Framework: PySide6 (Qt6) — native widgets only, no webviews, no Electron.
+- Language: Python 3.11+ (Managed with `uv` or standard venv)
+- Package & Environment Manager: `uv` (recommended) or `pip`
+- GUI Framework: pywebview (WebKitGTK) — native desktop window with a modern, beginner-friendly HTML/CSS/JS frontend.
 - LLM Providers: Groq (via `openai` SDK, targeting `llama-3.3-70b-versatile`, `qwen-2.5-coder-32b`) and Google GenAI SDK (`google-genai`), targeting `gemini-3.8-flash`.
 - Secret Storage: Linux keyring via the Python `keyring` library.
-- Threading & Concurrency: All LLM networking and subprocess executions must run on background QThreads using Qt Signal/Slot communication. Never block the Qt GUI thread.
+- Threading & Concurrency: All LLM networking and subprocess executions run on background daemon threads communicating via thread-safe signal/callback dispatch. Never block the UI loop.
 
 ## 3. Directory Layout
 linux-ai-helper/
@@ -19,17 +20,19 @@ linux-ai-helper/
 │   ├── profile_manager.py   # Stores/reads ~/.config/linux-helper/system_profile.json
 │   └── keyring_manager.py   # Secure API key handling via system keyring
 ├── agent/
-│   ├── llm_client.py        # google-genai wrapper with tool-calling support
+│   ├── events.py            # Pure-Python Signal/Slot event dispatcher
+│   ├── llm_client.py        # Multi-provider LLM client wrappers
 │   ├── prompts.py           # Dynamic system prompts (Beginner, Intermediate, Advanced)
 │   ├── tools.py             # Declarations for shell proposals & desktop file creation
 │   └── orchestrator.py      # HITL state machine pausing on mutating actions
 ├── executor/
+│   ├── askpass.py           # Zenity / kdialog graphical credential handler
 │   └── pty_runner.py        # Pseudo-terminal runner streaming stdout/stderr
 └── ui/
-    ├── main_window.py       # Centered reading column & collapsible terminal drawer
-    ├── onboarding_modal.py  # First-run modal (system preview, skill level, API key)
-    ├── approval_card.py     # Custom card widget for Approve / Edit / Cancel
-    └── theme.qss            # Pure neutral dark stylesheet (#080808 canvas, #121212 surfaces, #10b981 emerald)
+    ├── bridge.py            # Python ↔ pywebview JavaScript API bridge
+    ├── index.html           # Single-page UI with chat column & terminal drawer
+    ├── app.css              # Obsidian / Raycast dark theme (#09090b canvas, #10b981 emerald)
+    └── app.js               # Frontend event dispatch, ANSI parser & markdown renderer
 
 ## 4. Engineering Invariants
 1. Human-in-the-Loop: The agent must never execute mutating actions (running shell commands, modifying disk) without UI approval. Every tool call must trigger an approval request signal.

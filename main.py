@@ -1,8 +1,7 @@
 """Main entry point for Linux AI Assistant.
 
-Launches the native PySide6 desktop application with the dark slate theme,
-initializes the system profile, handles onboarding when necessary,
-and drives the HITL orchestrator.
+Launches the native pywebview desktop application with the dark slate theme,
+initializes the system profile, and drives the HITL orchestrator.
 """
 
 from __future__ import annotations
@@ -13,8 +12,26 @@ import logging
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication
+
+def _ensure_linux_system_site_packages() -> None:
+    """Ensure system-level PyGObject (gi) and WebKitGTK bindings are accessible in virtualenvs."""
+    try:
+        import gi  # noqa: F401
+    except ImportError:
+        candidates = [
+            f"/usr/lib64/python{sys.version_info.major}.{sys.version_info.minor}/site-packages",
+            f"/usr/lib/python{sys.version_info.major}.{sys.version_info.minor}/site-packages",
+            "/usr/lib64/python3/dist-packages",
+            "/usr/lib/python3/dist-packages",
+        ]
+        for candidate in candidates:
+            if candidate not in sys.path and Path(candidate).is_dir():
+                sys.path.append(candidate)
+
+
+_ensure_linux_system_site_packages()
+
+import webview
 
 from agent.llm_client import create_llm_client
 from agent.orchestrator import AgentOrchestrator
@@ -27,29 +44,13 @@ from config.profile_manager import (
     get_or_create_profile,
     load_profile,
 )
-from ui.main_window import MainWindow
-from ui.onboarding_modal import OnboardingModal
+from ui.bridge import AssistantBridge
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger("linux-ai-assistant")
-
-
-def load_stylesheet() -> str:
-    """Load the dark slate Qt stylesheet (ui/theme.qss)."""
-    qss_path = Path(__file__).parent / "ui" / "theme.qss"
-    svg_path = Path(__file__).parent / "ui" / "down_arrow.svg"
-    if qss_path.is_file():
-        try:
-            content = qss_path.read_text(encoding="utf-8")
-            if svg_path.is_file():
-                content = content.replace("url(ui/down_arrow.svg)", f"url({svg_path.as_posix()})")
-            return content
-        except OSError as exc:
-            logger.warning("Could not load theme.qss: %s", exc)
-    return ""
 
 
 def run_phase1_inspection(force_refresh: bool = False, custom_path: Path | None = None) -> None:
@@ -88,17 +89,7 @@ def run_phase1_inspection(force_refresh: bool = False, custom_path: Path | None 
 
 
 def launch_gui(force_onboarding: bool = False) -> int:
-    """Initialize and run the PySide6 desktop GUI."""
-    app = QApplication(sys.argv)
-    app.setApplicationName("Linux AI Assistant")
-    app.setApplicationDisplayName("Linux AI Assistant")
-
-    # Apply dark slate stylesheet
-    stylesheet = load_stylesheet()
-    if stylesheet:
-        app.setStyleSheet(stylesheet)
-
-    # Load system profile and dynamic session
+    """Initialize and run the pywebview desktop GUI."""
     profile = get_or_create_profile()
     dynamic = get_dynamic_session_info()
     skill_level = profile.get("skill_level", DEFAULT_SKILL_LEVEL)
@@ -109,45 +100,32 @@ def launch_gui(force_onboarding: bool = False) -> int:
     if provider == "ollama":
         api_key = api_key or "ollama"
 
-    # Trigger onboarding modal if no API key is saved for active provider or if explicitly requested
-    if (not api_key and provider != "ollama") or force_onboarding:
-        onboarding = OnboardingModal(profile=profile)
-        onboarding.exec()
-        # Refresh profile and key
-        profile = get_or_create_profile()
-        skill_level = profile.get("skill_level", DEFAULT_SKILL_LEVEL)
-        provider = profile.get("active_provider", "groq")
-        model_name = profile.get("model_name")
-        api_key = get_api_key(provider)
-        if provider == "ollama":
-            api_key = api_key or "ollama"
-
-    # Initialize client and orchestrator
     system_prompt = build_system_prompt(profile, dynamic, skill_level)
 
-    if api_key:
-        client = create_llm_client(
-            provider=provider,
-            api_key=api_key,
-            model_name=model_name,
-            system_prompt=system_prompt,
-        )
-    else:
-        # Placeholder client using dummy key until user provides one via Settings
-        logger.warning("No API key configured for provider '%s'.", provider)
-        client = create_llm_client(
-            provider=provider,
-            api_key="unconfigured",
-            model_name=model_name,
-            system_prompt=system_prompt,
-        )
-
+    client = create_llm_client(
+        provider=provider,
+        api_key=api_key or "unconfigured",
+        model_name=model_name,
+        system_prompt=system_prompt,
+    )
     orchestrator = AgentOrchestrator(client)
+    bridge = AssistantBridge(orchestrator=orchestrator)
 
-    window = MainWindow(orchestrator=orchestrator, profile=profile)
-    window.show()
+    html_path = Path(__file__).parent / "ui" / "index.html"
 
-    return app.exec()
+    window = webview.create_window(
+        title="Linux AI Assistant",
+        url=str(html_path.resolve()),
+        js_api=bridge,
+        width=920,
+        height=740,
+        min_size=(680, 500),
+        background_color="#09090b",
+    )
+    bridge.set_window(window)
+
+    webview.start(gui="gtk")
+    return 0
 
 
 def main() -> int:

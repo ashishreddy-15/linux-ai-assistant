@@ -305,6 +305,10 @@ OPENAI_TOOLS: List[Dict[str, Any]] = [
                         "type": "string",
                         "description": "Absolute or ~-expanded path to the file.",
                     },
+                    "path": {
+                        "type": "string",
+                        "description": "Alias for file_path.",
+                    },
                     "max_lines": {
                         "type": "integer",
                         "description": "Maximum number of lines to read. Defaults to 100.",
@@ -328,8 +332,16 @@ OPENAI_TOOLS: List[Dict[str, Any]] = [
                     "command_or_topic": {
                         "type": "string",
                         "description": (
-                            "The command or topic to inspect (e.g. 'nmcli', 'systemctl', 'ip-link')."
+                            "The command or topic to inspect (e.g. 'nmcli', 'systemctl', 'ip-link', 'dnf')."
                         ),
+                    },
+                    "command": {
+                        "type": "string",
+                        "description": "Alias for command_or_topic.",
+                    },
+                    "topic": {
+                        "type": "string",
+                        "description": "Alias for command_or_topic.",
                     },
                 },
                 "required": ["command_or_topic"],
@@ -337,6 +349,75 @@ OPENAI_TOOLS: List[Dict[str, Any]] = [
         },
     },
 ]
+
+
+def normalize_tool_args(name: str, raw_args: Any) -> Dict[str, Any]:
+    """Normalize and alias tool call arguments to conform to canonical schemas.
+
+    Ensures that aliases (e.g. 'command' or 'topic' for 'command_or_topic',
+    'path' for 'file_path') are mapped and mandatory schema fields are populated
+    with sensible defaults so that OpenAI/Groq tool-call schema validation succeeds.
+    """
+    args = dict(raw_args or {}) if isinstance(raw_args, dict) else {}
+    if name == "inspect_manual":
+        val = (
+            args.get("command_or_topic")
+            or args.get("command")
+            or args.get("topic")
+            or args.get("query")
+            or args.get("name")
+        )
+        if not val and args:
+            for v in args.values():
+                if isinstance(v, str) and v.strip():
+                    val = v.strip()
+                    break
+        args["command_or_topic"] = str(val or "bash")
+
+    elif name == "read_file_snippet":
+        val = (
+            args.get("file_path")
+            or args.get("path")
+            or args.get("file")
+            or args.get("filepath")
+            or args.get("target")
+        )
+        args["file_path"] = str(val or "/dev/null")
+        if "max_lines" not in args:
+            args["max_lines"] = 100
+        else:
+            try:
+                args["max_lines"] = int(args["max_lines"])
+            except (ValueError, TypeError):
+                args["max_lines"] = 100
+
+    elif name == "propose_shell_command":
+        if "command" not in args or not args["command"]:
+            args["command"] = str(args.get("cmd") or args.get("shell_command") or "")
+        if "explanation" not in args or not args["explanation"]:
+            args["explanation"] = str(
+                args.get("desc")
+                or args.get("description")
+                or args.get("reason")
+                or args.get("summary")
+                or "Proposed shell command"
+            )
+        if "requires_root" not in args:
+            args["requires_root"] = bool(
+                args.get("root") or args.get("sudo") or args.get("is_root") or False
+            )
+        else:
+            args["requires_root"] = bool(args["requires_root"])
+
+    elif name == "create_desktop_entry":
+        args.setdefault("app_name", str(args.get("name") or ""))
+        args.setdefault("exec_path", str(args.get("exec") or args.get("binary") or ""))
+        args.setdefault("icon_path", str(args.get("icon") or ""))
+        args.setdefault("categories", str(args.get("category") or ""))
+        args.setdefault("comment", str(args.get("description") or ""))
+
+    return args
+
 
 # ---------------------------------------------------------------------------
 # Tool execution helpers

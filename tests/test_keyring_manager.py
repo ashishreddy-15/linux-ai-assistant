@@ -49,10 +49,12 @@ class _MemoryKeyring(KeyringBackend):
 class TestKeyringManager(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        try:
-            keyring.get_password("test-probe", "probe-user")
-        except Exception:
-            keyring.set_keyring(_MemoryKeyring())
+        cls._orig_keyring = keyring.get_keyring()
+        keyring.set_keyring(_MemoryKeyring())
+
+    @classmethod
+    def tearDownClass(cls):
+        keyring.set_keyring(cls._orig_keyring)
     def test_save_and_retrieve_api_key(self):
         test_key = "test-secret-key-12345"
         save_api_key(test_key)

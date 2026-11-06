@@ -25,7 +25,7 @@ from typing import Any, Dict, List, Optional
 from google import genai
 from google.genai import errors, types
 
-from agent.tools import AGENT_TOOLS, OPENAI_TOOLS
+from agent.tools import AGENT_TOOLS, OPENAI_TOOLS, normalize_tool_args
 from config.provider_registry import PROVIDER_CONFIGS
 
 logger = logging.getLogger(__name__)
@@ -407,13 +407,15 @@ class OpenAIAgentClient(BaseLLMClient):
                     if part.function_call is not None:
                         fc = part.function_call
                         call_id = fc.id or f"call_{len(tool_calls)}"
+                        clean_args = normalize_tool_args(fc.name, fc.args)
+
                         tool_calls.append(
                             {
                                 "id": call_id,
                                 "type": "function",
                                 "function": {
                                     "name": fc.name,
-                                    "arguments": json.dumps(fc.args or {}),
+                                    "arguments": json.dumps(clean_args),
                                 },
                             }
                         )
@@ -475,6 +477,7 @@ class OpenAIAgentClient(BaseLLMClient):
                                 func_args = json.loads(tc.function.arguments)
                             except Exception:
                                 func_args = {}
+                        func_args = normalize_tool_args(tc.function.name, func_args)
                         parts.append(
                             types.Part(
                                 function_call=types.FunctionCall(

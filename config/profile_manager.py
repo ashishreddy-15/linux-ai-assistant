@@ -25,6 +25,9 @@ SECONDARY_PACKAGE_HELPERS = ("flatpak", "snap", "yay", "paru")
 DEFAULT_SKILL_LEVEL = "Intermediate"
 VALID_SKILL_LEVELS = ("Beginner", "Intermediate", "Advanced")
 
+DEFAULT_THEME = "dark"
+VALID_THEMES = ("dark", "light", "system")
+
 DEFAULT_PROVIDER = "groq"
 DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
 DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
@@ -171,6 +174,7 @@ def detect_static_system_profile() -> Dict[str, Any]:
         "total_ram_bytes": ram_info["total_ram_bytes"],
         "total_ram_gb": ram_info["total_ram_gb"],
         "skill_level": DEFAULT_SKILL_LEVEL,
+        "theme": DEFAULT_THEME,
         "active_provider": DEFAULT_PROVIDER,
         "model_name": DEFAULT_GROQ_MODEL,
     }
@@ -200,7 +204,9 @@ def load_profile(path: Path | str = DEFAULT_PROFILE_PATH) -> Optional[Dict[str, 
 
 
 def get_or_create_profile(
-    path: Path | str = DEFAULT_PROFILE_PATH, force_refresh: bool = False
+    path: Path | str = DEFAULT_PROFILE_PATH,
+    force_refresh: bool = False,
+    preserve_preferences: bool = False,
 ) -> Dict[str, Any]:
     """Retrieve existing profile or detect and write on initial launch."""
     if not force_refresh:
@@ -208,6 +214,12 @@ def get_or_create_profile(
         if existing:
             # Backfill provider settings if missing from earlier versions
             dirty = False
+            if "skill_level" not in existing:
+                existing["skill_level"] = DEFAULT_SKILL_LEVEL
+                dirty = True
+            if "theme" not in existing:
+                existing["theme"] = DEFAULT_THEME
+                dirty = True
             if "active_provider" not in existing:
                 existing["active_provider"] = DEFAULT_PROVIDER
                 dirty = True
@@ -225,7 +237,18 @@ def get_or_create_profile(
                 save_profile(existing, path)
             return existing
 
+    existing = load_profile(path) if preserve_preferences else None
     profile = detect_static_system_profile()
+    if existing:
+        if "skill_level" in existing:
+            profile["skill_level"] = existing["skill_level"]
+        if "theme" in existing:
+            profile["theme"] = existing["theme"]
+        if "active_provider" in existing:
+            profile["active_provider"] = existing["active_provider"]
+        if "model_name" in existing:
+            profile["model_name"] = existing["model_name"]
+
     save_profile(profile, path)
     return profile
 
@@ -241,6 +264,22 @@ def update_skill_level(
 
     profile = get_or_create_profile(path)
     profile["skill_level"] = skill_level
+    save_profile(profile, path)
+    return profile
+
+
+def update_theme(
+    theme: str, path: Path | str = DEFAULT_PROFILE_PATH
+) -> Dict[str, Any]:
+    """Update UI color theme in profile configuration ('dark', 'light', 'system')."""
+    theme_clean = theme.strip().lower()
+    if theme_clean not in VALID_THEMES:
+        raise ValueError(
+            f"Invalid theme '{theme}'. Must be one of {VALID_THEMES}"
+        )
+
+    profile = get_or_create_profile(path)
+    profile["theme"] = theme_clean
     save_profile(profile, path)
     return profile
 

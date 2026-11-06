@@ -22,11 +22,6 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from PySide6.QtWidgets import QApplication
-
-# Ensure QApplication exists for Qt signal/slot handling
-_app = QApplication.instance() or QApplication(sys.argv)
-
 from google.genai import types
 
 from agent.llm_client import GeminiAgentClient

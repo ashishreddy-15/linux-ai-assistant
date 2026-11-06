@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -464,6 +465,95 @@ class TestFetchAvailableModels(unittest.TestCase):
 
             models = fetch_available_models("ollama", "")
             self.assertEqual(models, ["qwen2.5-coder:7b", "llama3.2:3b", "mistral:7b"])
+
+
+class TestOpenAIAgentClientToolCallHandling(unittest.TestCase):
+    """Verify tool call conversion and normalization for OpenAI/Groq."""
+
+    def test_history_to_messages_normalizes_tool_calls(self):
+        client = OpenAIAgentClient(
+            api_key="gsk_test123456789012345678901234567890",
+            system_prompt="You are a helper.",
+            model="llama-3.3-70b-versatile",
+        )
+        history = [
+            types.Content(role="user", parts=[types.Part(text="Check dnf man page")]),
+            types.Content(
+                role="model",
+                parts=[
+                    types.Part(
+                        function_call=types.FunctionCall(
+                            name="inspect_manual",
+                            args={"command": "dnf"},  # using alias 'command'
+                            id="call_123",
+                        )
+                    )
+                ],
+            ),
+            types.Content(
+                role="user",
+                parts=[
+                    types.Part(
+                        function_response=types.FunctionResponse(
+                            name="inspect_manual",
+                            response={"result": "DNF manual content..."},
+                            id="call_123",
+                        )
+                    )
+                ],
+            ),
+        ]
+
+        messages = client._history_to_messages(history)
+        self.assertEqual(len(messages), 4)  # system + user + assistant + tool
+        self.assertEqual(messages[0]["role"], "system")
+        self.assertEqual(messages[1]["role"], "user")
+        self.assertEqual(messages[2]["role"], "assistant")
+        self.assertEqual(messages[3]["role"], "tool")
+
+        # Verify assistant tool call arguments have command_or_topic normalized
+        tool_call = messages[2]["tool_calls"][0]
+        args = json.loads(tool_call["function"]["arguments"])
+        self.assertIn("command_or_topic", args)
+        self.assertEqual(args["command_or_topic"], "dnf")
+
+    def test_generate_normalizes_incoming_tool_call_args(self):
+        with patch("openai.OpenAI") as mock_openai_cls:
+            mock_client = MagicMock()
+            mock_openai_cls.return_value = mock_client
+
+            # Simulate Groq LLM returning tool call with alias 'path' instead of 'file_path'
+            tc = MagicMock()
+            tc.id = "call_abc"
+            tc.function.name = "read_file_snippet"
+            tc.function.arguments = json.dumps({"path": "/etc/os-release"})
+
+            msg = MagicMock()
+            msg.content = None
+            msg.tool_calls = [tc]
+
+            choice = MagicMock()
+            choice.message = msg
+            choice.finish_reason = "tool_calls"
+
+            mock_resp = MagicMock()
+            mock_resp.choices = [choice]
+            mock_resp.usage = MagicMock(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+            mock_client.chat.completions.create.return_value = mock_resp
+
+            client = OpenAIAgentClient(
+                api_key="gsk_test123456789012345678901234567890",
+                system_prompt="You are a helper.",
+                model="llama-3.3-70b-versatile",
+            )
+            history = [types.Content(role="user", parts=[types.Part(text="Read os-release")])]
+            response = client.generate(history)
+
+            fc = response.candidates[0].content.parts[0].function_call
+            self.assertEqual(fc.name, "read_file_snippet")
+            self.assertIn("file_path", fc.args)
+            self.assertEqual(fc.args["file_path"], "/etc/os-release")
+            self.assertEqual(fc.args["max_lines"], 100)
 
 
 if __name__ == "__main__":

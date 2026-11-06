@@ -43,18 +43,20 @@ Threading model:
 from __future__ import annotations
 
 import logging
+import threading
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from PySide6.QtCore import QObject, QThread, Signal, Slot
 from google.genai import types
 
+from agent.events import Signal, Slot
 from agent.llm_client import BaseLLMClient, GeminiAgentClient
 from agent.tools import (
     MUTATING_TOOLS,
     READONLY_TOOLS,
     execute_inspect_manual,
     execute_read_file_snippet,
+    normalize_tool_args,
 )
 from executor.pty_runner import CommandRunner, is_high_risk
 
@@ -74,35 +76,10 @@ class OrchestratorState(str, Enum):
 
 
 # ---------------------------------------------------------------------------
-# Internal worker: runs LLM call on a background thread
-# ---------------------------------------------------------------------------
-
-class _LLMWorker(QObject):
-    """QObject that performs a single blocking generate_content call."""
-
-    response_ready = Signal(object)   # types.GenerateContentResponse
-    error = Signal(str)
-
-    def __init__(self, client: BaseLLMClient, history: list) -> None:
-        super().__init__()
-        self._client = client
-        self._history = list(history)  # snapshot
-
-    @Slot()
-    def run(self) -> None:
-        try:
-            resp = self._client.generate(self._history)
-            self.response_ready.emit(resp)
-        except Exception as exc:
-            logger.exception("LLM call failed")
-            self.error.emit(str(exc))
-
-
-# ---------------------------------------------------------------------------
 # Orchestrator
 # ---------------------------------------------------------------------------
 
-class AgentOrchestrator(QObject):
+class AgentOrchestrator:
     """HITL state machine coordinating LLM calls and PTY command execution.
 
     Parameters
@@ -110,24 +87,23 @@ class AgentOrchestrator(QObject):
     llm_client:
         A fully configured GeminiAgentClient instance.
     parent:
-        Optional parent QObject.
+        Optional parent object (kept for backwards compatibility).
     """
-
-    # --- Signals ---
-    response_chunk: Signal = Signal(str)
-    response_ready: Signal = Signal(str)
-    approval_requested: Signal = Signal(dict)
-    command_output: Signal = Signal(str)
-    command_finished: Signal = Signal(int, str)
-    error_occurred: Signal = Signal(str)
-    state_changed: Signal = Signal(str)
 
     def __init__(
         self,
         llm_client: BaseLLMClient,
-        parent: QObject | None = None,
+        parent: Any = None,
     ) -> None:
-        super().__init__(parent)
+        # --- Signals ---
+        self.response_chunk: Signal = Signal(str)
+        self.response_ready: Signal = Signal(str)
+        self.approval_requested: Signal = Signal(dict)
+        self.command_output: Signal = Signal(str)
+        self.command_finished: Signal = Signal(int, str)
+        self.error_occurred: Signal = Signal(str)
+        self.state_changed: Signal = Signal(str)
+
         self._client = llm_client
         self._history: List[types.Content] = []
         self._state = OrchestratorState.IDLE
@@ -137,9 +113,8 @@ class AgentOrchestrator(QObject):
         self._executing_tool_call: Optional[types.FunctionCall] = None
 
         # Worker threads (kept alive while running)
-        self._llm_thread: Optional[QThread] = None
-        self._llm_worker: Optional[_LLMWorker] = None
-        self._cmd_thread: Optional[QThread] = None
+        self._llm_thread: Optional[threading.Thread] = None
+        self._cmd_thread: Optional[threading.Thread] = None
         self._cmd_runner: Optional[CommandRunner] = None
 
     # ------------------------------------------------------------------
@@ -252,21 +227,16 @@ class AgentOrchestrator(QObject):
         """Kick off a background LLM call with the current history."""
         self._set_state(OrchestratorState.THINKING)
 
-        worker = _LLMWorker(self._client, self._history)
-        thread = QThread(self)
-        worker.moveToThread(thread)
+        def _worker() -> None:
+            try:
+                resp = self._client.generate(self._history)
+                self._on_llm_response(resp)
+            except Exception as exc:
+                logger.exception("LLM call failed")
+                self._on_llm_error(str(exc))
 
-        thread.started.connect(worker.run)
-        worker.response_ready.connect(self._on_llm_response)
-        worker.error.connect(self._on_llm_error)
-        # Cleanup
-        worker.response_ready.connect(thread.quit)
-        worker.error.connect(thread.quit)
-        thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-
+        thread = threading.Thread(target=_worker, daemon=True)
         self._llm_thread = thread
-        self._llm_worker = worker
         thread.start()
 
     @Slot(object)
@@ -321,7 +291,7 @@ class AgentOrchestrator(QObject):
 
     def _handle_readonly_tool(self, fc: types.FunctionCall) -> None:
         """Execute a read-only tool immediately and continue the LLM loop."""
-        args: Dict[str, Any] = dict(fc.args or {})
+        args: Dict[str, Any] = normalize_tool_args(fc.name, fc.args)
 
         if fc.name == "read_file_snippet":
             file_path = args.get("file_path", "")
@@ -343,7 +313,7 @@ class AgentOrchestrator(QObject):
 
     def _handle_mutating_tool(self, fc: types.FunctionCall) -> None:
         """Pause execution and emit approval_requested for the UI."""
-        args: Dict[str, Any] = dict(fc.args or {})
+        args: Dict[str, Any] = normalize_tool_args(fc.name, fc.args)
         tool_name = fc.name
 
         if tool_name == "propose_shell_command":
@@ -373,7 +343,8 @@ class AgentOrchestrator(QObject):
         else:
             payload = {"tool_name": tool_name, "raw_args": args}
 
-        self._pending_tool_call = fc
+        normalized_fc = types.FunctionCall(name=fc.name, args=args, id=fc.id)
+        self._pending_tool_call = normalized_fc
         self._set_state(OrchestratorState.AWAITING_APPROVAL)
         self.approval_requested.emit(payload)
 
@@ -382,31 +353,21 @@ class AgentOrchestrator(QObject):
     # ------------------------------------------------------------------
 
     def _execute_command(self, command: str, tool_call: types.FunctionCall) -> None:
-        """Run an approved shell command via CommandRunner on a worker QThread."""
+        """Run an approved shell command via CommandRunner on a worker thread."""
         self._set_state(OrchestratorState.EXECUTING)
         self._executing_tool_call = tool_call
 
         runner = CommandRunner(command=command)
-        thread = QThread(self)
-        runner.moveToThread(thread)
 
         # Wire PTY signals → orchestrator signals (forwarded to UI)
-        runner.output_received.connect(self.command_output)
-
-        # When the command finishes, handle the result on GUI thread via slot
+        runner.output_received.connect(self.command_output.emit)
         runner.command_finished.connect(self._on_command_finished_slot)
 
-        # Cleanup on thread exit
-        runner.command_finished.connect(thread.quit)
-        thread.finished.connect(runner.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-
         # Store refs to allow abort()
-        self._cmd_thread = thread
         self._cmd_runner = runner
 
-        # Start thread; start_execution slot executes directly on the worker thread
-        thread.started.connect(runner.start_execution)
+        thread = threading.Thread(target=runner.start_execution, daemon=True)
+        self._cmd_thread = thread
         thread.start()
 
     @Slot(int, str)
@@ -419,7 +380,7 @@ class AgentOrchestrator(QObject):
     def _execute_create_desktop_entry(self, tool_call: types.FunctionCall) -> None:
         """Execute creation of a .desktop launcher, trigger database update, and report back."""
         self._set_state(OrchestratorState.EXECUTING)
-        args: Dict[str, Any] = dict(tool_call.args or {})
+        args: Dict[str, Any] = normalize_tool_args(tool_call.name, tool_call.args)
         app_name = args.get("app_name", "")
         exec_path = args.get("exec_path", "")
         icon_path = args.get("icon_path", "")

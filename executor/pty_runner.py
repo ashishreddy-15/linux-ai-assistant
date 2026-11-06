@@ -28,9 +28,9 @@ import sys
 import time
 from collections import deque
 from pathlib import Path
-from typing import Deque
+from typing import Any, Deque
 
-from PySide6.QtCore import QObject, Signal, Slot
+from agent.events import Signal, Slot
 
 logger = logging.getLogger(__name__)
 
@@ -158,20 +158,8 @@ _READ_SIZE = 4096      # bytes per pty read
 _POLL_TIMEOUT = 0.1    # seconds to wait in select() per iteration
 
 
-class CommandRunner(QObject):
-    """Execute a shell command inside a PTY and stream output to Qt signals.
-
-    Intended usage
-    --------------
-    Create the runner, optionally move it to a QThread, then call ``run()``.
-
-        thread = QThread()
-        runner = CommandRunner()
-        runner.moveToThread(thread)
-        thread.started.connect(lambda: runner.run("echo hello"))
-        runner.command_finished.connect(on_done)
-        runner.output_received.connect(on_line)
-        thread.start()
+class CommandRunner:
+    """Execute a shell command inside a PTY and stream output to signals.
 
     Signals
     -------
@@ -183,16 +171,14 @@ class CommandRunner(QObject):
         Args: (exit_code, last_20_lines_of_output)
     """
 
-    output_received: Signal = Signal(str)
-    command_finished: Signal = Signal(int, str)
-
     def __init__(
         self,
         command: str = "",
         timeout: float | None = None,
-        parent: QObject | None = None,
+        parent: Any = None,
     ) -> None:
-        super().__init__(parent)
+        self.output_received: Signal = Signal(str)
+        self.command_finished: Signal = Signal(int, str)
         self._command: str = command
         self._timeout: float | None = timeout
         self._stop_requested: bool = False

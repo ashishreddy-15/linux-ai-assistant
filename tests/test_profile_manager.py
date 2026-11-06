@@ -9,11 +9,13 @@ import unittest
 
 from config.profile_manager import (
     DEFAULT_SKILL_LEVEL,
+    DEFAULT_THEME,
     DEFAULT_PROVIDER,
     DEFAULT_GROQ_MODEL,
     DEFAULT_GEMINI_MODEL,
     DEFAULT_OLLAMA_MODEL,
     VALID_SKILL_LEVELS,
+    VALID_THEMES,
     detect_cpu_architecture,
     detect_os_release,
     detect_primary_package_manager,
@@ -26,6 +28,7 @@ from config.profile_manager import (
     save_profile,
     update_provider_settings,
     update_skill_level,
+    update_theme,
 )
 
 
@@ -126,6 +129,23 @@ class TestProfileManager(unittest.TestCase):
 
             with self.assertRaises(ValueError):
                 update_skill_level("InvalidLevel", path=target)
+
+    def test_update_theme(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            target = Path(tmp_dir) / "system_profile.json"
+            get_or_create_profile(path=target)
+
+            updated = update_theme("light", path=target)
+            self.assertEqual(updated["theme"], "light")
+
+            updated = update_theme("dark", path=target)
+            self.assertEqual(updated["theme"], "dark")
+
+            updated = update_theme("system", path=target)
+            self.assertEqual(updated["theme"], "system")
+
+            with self.assertRaises(ValueError):
+                update_theme("invalid_neon_theme", path=target)
 
     def test_update_provider_settings(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
