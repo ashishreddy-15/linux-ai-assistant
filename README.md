@@ -10,7 +10,7 @@ Designed specifically for Linux power users and beginners alike, it manages syst
 
 - **Strict Human-in-the-Loop (HITL) Invariant**: The assistant **never** executes mutating shell commands or modifies system files without explicit user review and approval via interactive approval cards.
 - **Lightweight Native Desktop Experience**: Zero Electron, zero heavy Qt framework downloads. Uses the Linux system's native **WebKitGTK 4.1** runtime via `pywebview`.
-- **Obsidian / Raycast Dark Aesthetic**: Crafted with an ultra-clean neutral dark theme (`#09090b` canvas, `#121215` surfaces, `#10b981` emerald accents) and a centered reading column.
+- **Obsidian Dark & Clean Light Themes**: Crafted with an ultra-clean neutral dark theme (`#09090b` canvas, `#121215` surfaces, `#10b981` emerald accents) and an accessible high-contrast **Light Theme** for beginners, switchable with a single header button or via system color-scheme detection.
 - **Comprehensive Multi-Provider Engine**:
   - **Groq Cloud** (Ultra-Fast Free Tier): High-speed inference using `llama-3.3-70b-versatile`, `qwen-2.5-32b`, and `llama-3.1-8b-instant`.
   - **Google Gemini** (AI Studio Free Tier): Robust reasoning with `gemini-2.5-flash` and `gemini-1.5-flash` with exponential backoff on transient errors.
@@ -42,7 +42,9 @@ The interface adapts dynamically based on the user's chosen expertise mode:
 ## User Interface
 
 - **Unified Floating Command Bar**: Minimalist input bar inspired by Linear and Raycast with focus indicators, instant keyboard shortcuts (`Enter` to submit), and a contextual stop button.
+- **Instant Theme Toggle**: Easily switch between Dark and Light mode directly from the top header (`Theme` button) or configure Appearance in the Settings modal (`Dark`, `Light`, or `Follow System`).
 - **Collapsible Terminal Drawer**: A vertical drawer containing real-time ANSI-stripped stdout/stderr logs. Auto-expands to 180px during command execution and collapses with a single click.
+- **Manual System Info Sync**: Real-time OS and environment re-detection button (`Sync Info`) in Settings and on the system header badge, updating kernel, package manager, and storage info on demand without wiping user preferences.
 - **Starter Chips**: One-click prompt suggestions on empty chat states covering Software Setup, Hardware & Drivers, System Settings, Network & DNS, and System Health.
 - **Interactive Approval Cards**: Highlighting command risk levels, parameter diffs, and irreversible command warnings.
 - **Quick-Start Guidance Card**: Modern Raycast-styled surface card below the Provider dropdown guiding users through free key registration, live credential testing, and local daemon status checks.
@@ -72,9 +74,9 @@ linux-ai-assistant/
 ├── ui/
 │   ├── bridge.py               # Python ↔ JavaScript bidirectional API bridge
 │   ├── index.html              # Desktop client window layout with chat & terminal drawer
-│   ├── app.css                 # Clean neutral dark stylesheet
+│   ├── app.css                 # Obsidian dark & clean light mode stylesheet
 │   └── app.js                  # Frontend event dispatch, ANSI parser & markdown renderer
-└── tests/                      # Full test suite (210+ unit & integration tests)
+└── tests/                      # Full test suite (227 unit & integration tests)
 ```
 
 ---
