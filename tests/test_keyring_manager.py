@@ -7,6 +7,9 @@ from unittest.mock import MagicMock, patch
 import keyring
 from keyring.backend import KeyringBackend
 
+from config.keyring_manager import test_api_key as check_api_key
+from config.keyring_manager import test_groq_api_key as check_groq_api_key
+from config.keyring_manager import test_provider_api_key as check_provider_api_key
 from config.keyring_manager import (
     KEY_NAME,
     OLLAMA_KEY_NAME,
@@ -17,9 +20,6 @@ from config.keyring_manager import (
     fetch_available_models,
     get_api_key,
     save_api_key,
-    test_api_key,
-    test_groq_api_key,
-    test_provider_api_key,
     validate_key_format,
 )
 from config.provider_registry import PROVIDER_CONFIGS
@@ -80,13 +80,13 @@ class TestKeyringManager(unittest.TestCase):
         self.assertTrue(delete_api_key())
 
     def test_test_api_key_empty(self):
-        valid, msg = test_api_key("")
+        valid, msg = check_api_key("")
         self.assertFalse(valid)
         self.assertIn("empty", msg.lower())
 
     def test_test_api_key_invalid(self):
         # Test with dummy key against Google GenAI client
-        valid, msg = test_api_key("fake_invalid_gemini_key")
+        valid, msg = check_api_key("fake_invalid_gemini_key")
         self.assertFalse(valid)
         self.assertTrue(len(msg) > 0)
 
@@ -99,7 +99,7 @@ class TestKeyringManager(unittest.TestCase):
             mock_model.name = "models/gemini-3.8-flash"
             mock_instance.models.list.return_value = [mock_model]
 
-            valid, msg = test_api_key("valid_dummy_key")
+            valid, msg = check_api_key("valid_dummy_key")
             self.assertTrue(valid)
             self.assertIn("verified", msg.lower())
             mock_instance.models.list.assert_called_once()
@@ -115,7 +115,7 @@ class TestKeyringManager(unittest.TestCase):
         self.assertIsNone(get_api_key("groq"))
 
     def test_test_groq_api_key_empty(self):
-        valid, msg = test_groq_api_key("")
+        valid, msg = check_groq_api_key("")
         self.assertFalse(valid)
         self.assertIn("empty", msg.lower())
 
@@ -125,7 +125,7 @@ class TestKeyringManager(unittest.TestCase):
             mock_openai_cls.return_value = mock_instance
             mock_instance.models.list.return_value = MagicMock(data=[MagicMock(id="llama-3.3-70b-versatile")])
 
-            valid, msg = test_groq_api_key("test_groq_key", model="llama-3.3-70b-versatile")
+            valid, msg = check_groq_api_key("test_groq_key", model="llama-3.3-70b-versatile")
             self.assertTrue(valid)
             self.assertIn("verified", msg.lower())
             mock_instance.models.list.assert_called_once()

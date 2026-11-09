@@ -1,6 +1,6 @@
 # Linux AI Assistant
 
-A lightweight, native Linux desktop assistant built with **Python** and **pywebview (WebKitGTK)**. It pairs modern LLM reasoning with a strict **Human-in-the-Loop (HITL)** approval safety architecture, dynamic system environment inspection, and a live streaming pseudo-terminal (PTY) drawer.
+A lightweight, native Linux desktop assistant built with **Python** and **GTK4 / libadwaita**. It pairs modern LLM reasoning with a strict **Human-in-the-Loop (HITL)** approval safety architecture, dynamic system environment inspection, and live command output streamed into each action card.
 
 Designed specifically for Linux power users and beginners alike, it manages system configuration, software installations, tarball extraction, `.desktop` launcher creation, and system diagnostics without requiring elevated privileges whenever possible.
 
@@ -9,8 +9,8 @@ Designed specifically for Linux power users and beginners alike, it manages syst
 ## Key Highlights
 
 - **Strict Human-in-the-Loop (HITL) Invariant**: The assistant **never** executes mutating shell commands or modifies system files without explicit user review and approval via interactive approval cards.
-- **Lightweight Native Desktop Experience**: Zero Electron, zero heavy Qt framework downloads. Uses the Linux system's native **WebKitGTK 4.1** runtime via `pywebview`.
-- **Obsidian Dark & Clean Light Themes**: Crafted with an ultra-clean neutral dark theme (`#09090b` canvas, `#121215` surfaces, `#10b981` emerald accents) and an accessible high-contrast **Light Theme** for beginners, switchable with a single header button or via system color-scheme detection.
+- **Lightweight Native Desktop Experience**: Zero Electron, zero embedded browser. A native **GTK4 + libadwaita** app drawn by the toolkit your desktop already has, so it starts fast and uses little memory.
+- **Follows Your Theme**: Uses only libadwaita's colour variables, so it matches each user's light/dark setting, accent colour and custom GTK theme.
 - **Comprehensive Multi-Provider Engine**:
   - **Groq Cloud** (Ultra-Fast Free Tier): High-speed inference using `llama-3.3-70b-versatile`, `qwen-2.5-32b`, and `llama-3.1-8b-instant`.
   - **Google Gemini** (AI Studio Free Tier): Robust reasoning with `gemini-2.5-flash` and `gemini-1.5-flash` with exponential backoff on transient errors.
@@ -41,21 +41,20 @@ The interface adapts dynamically based on the user's chosen expertise mode:
 
 ## User Interface
 
-- **Unified Floating Command Bar**: Minimalist input bar inspired by Linear and Raycast with focus indicators, instant keyboard shortcuts (`Enter` to submit), and a contextual stop button.
-- **Instant Theme Toggle**: Easily switch between Dark and Light mode directly from the top header (`Theme` button) or configure Appearance in the Settings modal (`Dark`, `Light`, or `Follow System`).
-- **Collapsible Terminal Drawer**: A vertical drawer containing real-time ANSI-stripped stdout/stderr logs. Auto-expands to 180px during command execution and collapses with a single click.
-- **Manual System Info Sync**: Real-time OS and environment re-detection button (`Sync Info`) in Settings and on the system header badge, updating kernel, package manager, and storage info on demand without wiping user preferences.
-- **Starter Chips**: One-click prompt suggestions on empty chat states covering Software Setup, Hardware & Drivers, System Settings, Network & DNS, and System Health.
-- **Interactive Approval Cards**: Highlighting command risk levels, parameter diffs, and irreversible command warnings.
-- **Quick-Start Guidance Card**: Modern Raycast-styled surface card below the Provider dropdown guiding users through free key registration, live credential testing, and local daemon status checks.
+A quiet, native design that takes **all of its colours from your desktop theme**: light or dark, your GNOME accent colour, and any custom libadwaita theme (`~/.config/gtk-4.0/gtk.css`) are followed automatically.
 
----
+- **Launcher-style home**: a one-line system summary (`fedora 45 · gnome · 212 GB free · groq`), a `❯` prompt, and keyboard-navigable suggestions (↑↓ to choose, ↵ to start).
+- **Action cards**: every proposed change is a flat card with a plain-language title, a short “what will happen” list and a status word (*no password needed*, *needs your password* in the theme's warning colour, *high risk* in its error colour). Approving turns the card into a live progress view; finished steps collapse to a single `✓ … · done · 14s` row.
+- **Extra safety for high-risk steps**: the run button stays locked until you tick “I understand this can't be undone”. If an expert edits a command into something destructive, the card switches to high risk before running it.
+- **Adapts to skill level**: *New to Linux* hides commands behind “show command”; *I know the basics* shows them read-only with the output visible; *At home in a terminal* gets an editable command (Ctrl+Enter to run).
+- **Two-step setup**: experience level, then a free cloud AI (Groq, with live key checking) or a private local one (Ollama).
+- **Preferences dialog**: experience level, appearance (follow system / light / dark), AI provider/model/key (stored in the system keyring) and system info.
 
 ## Directory Layout
 
 ```
 linux-ai-assistant/
-├── main.py                     # Application entry point & pywebview window loader
+├── main.py                     # Application entry point (CLI flags, launches the GTK app)
 ├── pyproject.toml              # Project dependencies & build metadata
 ├── AGENTS.md                   # Invariant specifications & engineering rules
 ├── config/
@@ -72,10 +71,18 @@ linux-ai-assistant/
 │   ├── askpass.py              # Graphical sudo / pkexec credential handler (zenity / kdialog)
 │   └── pty_runner.py           # Pseudo-terminal runner streaming stdout/stderr
 ├── ui/
-│   ├── bridge.py               # Python ↔ JavaScript bidirectional API bridge
-│   ├── index.html              # Desktop client window layout with chat & terminal drawer
-│   ├── app.css                 # Obsidian dark & clean light mode stylesheet
-│   └── app.js                  # Frontend event dispatch, ANSI parser & markdown renderer
+│   ├── app.py                  # Adw.Application: stylesheet, icons, light/dark sync
+│   ├── window.py               # Main window; marshals orchestrator events onto the GTK loop
+│   ├── home.py                 # Launcher-style prompt and suggestions
+│   ├── chat.py                 # Conversation view and friendly error rows
+│   ├── action_card.py          # Approval → running → result card
+│   ├── onboarding.py           # First-run setup
+│   ├── preferences.py          # Adw.PreferencesDialog
+│   ├── controller.py           # GTK-free settings/provider logic (unit-tested)
+│   ├── widgets.py              # Shared widgets: terminal view, Markdown view, key hints
+│   ├── ansi.py / markup.py     # ANSI parser and escaped Markdown → Pango converter
+│   ├── style.css               # GTK CSS: shape and type only, colours from the theme
+│   └── icons/                  # App symbolic icon
 └── tests/                      # Full test suite (227 unit & integration tests)
 ```
 
@@ -87,10 +94,11 @@ linux-ai-assistant/
 
 - Linux (Arch, Fedora, Debian/Ubuntu, openSUSE, etc.)
 - Python 3.11+ (or let `uv` manage Python versions automatically)
-- System GTK & WebKitGTK runtime (already installed on most desktop distributions):
-  - **Fedora**: `sudo dnf install python3-gobject webkit2gtk4.1`
-  - **Debian / Ubuntu**: `sudo apt install python3-gi python3-gi-cairo gir1.2-webkit2-4.1`
-  - **Arch Linux**: `sudo pacman -S python-gobject webkit2gtk-4.1`
+- System GTK4 + libadwaita (1.7 or newer) with Python bindings (preinstalled on most current desktops):
+  - **Fedora**: `sudo dnf install python3-gobject gtk4 libadwaita`
+  - **Debian / Ubuntu**: `sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-adw-1`
+  - **Arch Linux**: `sudo pacman -S python-gobject gtk4 libadwaita`
+- The virtual environment's Python must be the same version as the system Python, because PyGObject is loaded from the system site-packages.
 - [`uv`](https://github.com/astral-sh/uv) (recommended) or Python `venv` + `pip`
 - System Keyring daemon (`gnome-keyring`, `ksecretsservice`, or `keepassxc`)
 - *(Optional)* [Ollama](https://ollama.com/) for fully local, offline inference
@@ -121,7 +129,6 @@ pip install -e .
 ```
 
 Dependencies include:
-- `pywebview>=6.2.1`
 - `openai>=1.0.0`
 - `google-genai>=0.1.0`
 - `keyring>=24.0.0`
@@ -168,7 +175,7 @@ The project includes extensive test coverage across the PTY runner, tool executi
 
 ```bash
 # Using uv:
-uv run python -m unittest discover -s tests -v
+uv run --group dev pytest
 
 # Or directly with an activated .venv:
 python3 -m unittest discover -s tests -v

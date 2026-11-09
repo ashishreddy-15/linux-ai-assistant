@@ -1,7 +1,7 @@
 """Main entry point for Linux AI Assistant.
 
-Launches the native pywebview desktop application with the dark slate theme,
-initializes the system profile, and drives the HITL orchestrator.
+Launches the native GTK4 / libadwaita desktop application, initializes the
+system profile, and drives the HITL orchestrator.
 """
 
 from __future__ import annotations
@@ -31,20 +31,12 @@ def _ensure_linux_system_site_packages() -> None:
 
 _ensure_linux_system_site_packages()
 
-import webview
-
-from agent.llm_client import create_llm_client
-from agent.orchestrator import AgentOrchestrator
-from agent.prompts import build_system_prompt
 from config.keyring_manager import get_api_key, test_api_key, test_groq_api_key
 from config.profile_manager import (
     DEFAULT_PROFILE_PATH,
-    DEFAULT_SKILL_LEVEL,
     get_dynamic_session_info,
     get_or_create_profile,
-    load_profile,
 )
-from ui.bridge import AssistantBridge
 
 logging.basicConfig(
     level=logging.INFO,
@@ -89,43 +81,11 @@ def run_phase1_inspection(force_refresh: bool = False, custom_path: Path | None 
 
 
 def launch_gui(force_onboarding: bool = False) -> int:
-    """Initialize and run the pywebview desktop GUI."""
-    profile = get_or_create_profile()
-    dynamic = get_dynamic_session_info()
-    skill_level = profile.get("skill_level", DEFAULT_SKILL_LEVEL)
-    provider = profile.get("active_provider", "groq")
-    model_name = profile.get("model_name")
+    """Initialize and run the GTK4 / libadwaita desktop GUI."""
+    get_or_create_profile()
+    from ui.app import run
 
-    api_key = get_api_key(provider)
-    if provider == "ollama":
-        api_key = api_key or "ollama"
-
-    system_prompt = build_system_prompt(profile, dynamic, skill_level)
-
-    client = create_llm_client(
-        provider=provider,
-        api_key=api_key or "unconfigured",
-        model_name=model_name,
-        system_prompt=system_prompt,
-    )
-    orchestrator = AgentOrchestrator(client)
-    bridge = AssistantBridge(orchestrator=orchestrator)
-
-    html_path = Path(__file__).parent / "ui" / "index.html"
-
-    window = webview.create_window(
-        title="Linux AI Assistant",
-        url=str(html_path.resolve()),
-        js_api=bridge,
-        width=920,
-        height=740,
-        min_size=(680, 500),
-        background_color="#09090b",
-    )
-    bridge.set_window(window)
-
-    webview.start(gui="gtk")
-    return 0
+    return run(force_onboarding=force_onboarding)
 
 
 def main() -> int:

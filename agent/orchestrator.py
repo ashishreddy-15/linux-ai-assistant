@@ -44,8 +44,9 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections import deque
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Deque, Dict, List, Optional
 
 from google.genai import types
 
@@ -112,6 +113,12 @@ class AgentOrchestrator:
         self._pending_tool_call: Optional[types.FunctionCall] = None
         self._executing_tool_call: Optional[types.FunctionCall] = None
 
+        # A model turn may contain several tool calls. They are handled one at
+        # a time (each change still needs approval) and every call gets an
+        # answer before the model is asked to continue.
+        self._batch: Deque[types.FunctionCall] = deque()
+        self._batch_results: List[types.Part] = []
+
         # Worker threads (kept alive while running)
         self._llm_thread: Optional[threading.Thread] = None
         self._cmd_thread: Optional[threading.Thread] = None
@@ -133,6 +140,8 @@ class AgentOrchestrator:
     def clear_history(self) -> None:
         """Reset the conversation to an empty state."""
         self._history.clear()
+        self._batch.clear()
+        self._batch_results = []
         self._set_state(OrchestratorState.IDLE)
 
     def update_system_prompt(self, system_prompt: str) -> None:
@@ -204,14 +213,9 @@ class AgentOrchestrator:
             f"The user rejected the proposed command. Reason: {reason or 'No reason given'}. "
             "Please suggest an alternative approach or ask the user for clarification."
         )
-        result_content = GeminiAgentClient.make_tool_result(
-            tool_call_id=tool_call.id or "",
-            function_name=tool_call.name,
-            result=f"REJECTED: {rejection_msg}",
-        )
-        self._history.append(result_content)
-        self._set_state(OrchestratorState.IDLE)
-        self._call_llm()
+        self._add_result(tool_call, f"REJECTED: {rejection_msg}")
+        self._skip_remaining("the user rejected an earlier step in this batch")
+        self._continue()
 
     @Slot()
     def abort(self) -> None:
@@ -262,24 +266,10 @@ class AgentOrchestrator:
             self._set_state(OrchestratorState.IDLE)
             return
 
-        # Process the first function call (Gemini typically returns one)
-        fc = function_calls[0]
-        logger.debug("Model requested tool: %s", fc.name)
-
-        if fc.name in READONLY_TOOLS:
-            self._handle_readonly_tool(fc)
-        elif fc.name in MUTATING_TOOLS:
-            self._handle_mutating_tool(fc)
-        else:
-            logger.warning("Unknown tool name: %s", fc.name)
-            # Return an error result to the model
-            err_content = GeminiAgentClient.make_tool_result(
-                tool_call_id=fc.id or "",
-                function_name=fc.name,
-                result=f"ERROR: Unknown tool '{fc.name}'.",
-            )
-            self._history.append(err_content)
-            self._call_llm()
+        # Answer every tool call in this turn, in order.
+        self._batch = deque(function_calls)
+        self._batch_results = []
+        self._process_next()
 
     @Slot(str)
     def _on_llm_error(self, error_msg: str) -> None:
@@ -303,13 +293,7 @@ class AgentOrchestrator:
         else:
             result = f"ERROR: Unhandled readonly tool '{fc.name}'."
 
-        result_content = GeminiAgentClient.make_tool_result(
-            tool_call_id=fc.id or "",
-            function_name=fc.name,
-            result=result,
-        )
-        self._history.append(result_content)
-        self._call_llm()
+        self._add_result(fc, result)
 
     def _handle_mutating_tool(self, fc: types.FunctionCall) -> None:
         """Pause execution and emit approval_requested for the UI."""
@@ -328,11 +312,30 @@ class AgentOrchestrator:
                 "explanation": explanation,
                 "requires_root": requires_root,
                 "high_risk": high_risk,
+                "title": args.get("title") or "",
+                "effects": list(args.get("effects") or []),
             }
 
         elif tool_name == "create_desktop_entry":
+            from agent.tools import render_desktop_entry
+
+            app_name = args.get("app_name", "") or "this app"
             payload = {
                 "tool_name": tool_name,
+                "title": f"Add {app_name} to your app menu",
+                "explanation": args.get("comment", ""),
+                "effects": [
+                    "Creates a launcher in ~/.local/share/applications",
+                    f"Lets you open {app_name} from your app menu",
+                ],
+                "command": render_desktop_entry(
+                    app_name=args.get("app_name", ""),
+                    exec_path=args.get("exec_path", ""),
+                    icon_path=args.get("icon_path", ""),
+                    categories=args.get("categories", ""),
+                    comment=args.get("comment", ""),
+                ),
+                "requires_root": False,
                 "app_name": args.get("app_name", ""),
                 "exec_path": args.get("exec_path", ""),
                 "icon_path": args.get("icon_path", ""),
@@ -405,14 +408,10 @@ class AgentOrchestrator:
             self.command_output.emit(result_msg + "\n")
 
         self.command_finished.emit(exit_code, result_msg)
-        result_content = GeminiAgentClient.make_tool_result(
-            tool_call_id=tool_call.id or "",
-            function_name=tool_call.name,
-            result=result_msg,
-        )
-        self._history.append(result_content)
-        self._set_state(OrchestratorState.IDLE)
-        self._call_llm()
+        self._add_result(tool_call, result_msg)
+        if exit_code != 0:
+            self._skip_remaining("an earlier step in this batch failed")
+        self._continue()
 
     @Slot(int, str)
     def _on_command_finished(
@@ -438,13 +437,66 @@ class AgentOrchestrator:
                 f"Last output lines:\n{tail_log}"
             )
 
-        result_content = GeminiAgentClient.make_tool_result(
-            tool_call_id=tool_call.id or "",
-            function_name=tool_call.name,
-            result=result_text,
+        self._add_result(tool_call, result_text)
+        if exit_code != 0:
+            why = "the user stopped an earlier step" if exit_code == -1 else "an earlier step in this batch failed"
+            self._skip_remaining(why)
+        self._continue()
+
+    # ------------------------------------------------------------------
+    # Internal: tool-call batches
+    # ------------------------------------------------------------------
+
+    def _process_next(self) -> None:
+        """Handle queued tool calls until one needs approval or all are answered."""
+        while self._batch:
+            fc = self._batch.popleft()
+            logger.debug("Model requested tool: %s", fc.name)
+            if fc.name in READONLY_TOOLS:
+                self._handle_readonly_tool(fc)
+            elif fc.name in MUTATING_TOOLS:
+                self._handle_mutating_tool(fc)
+                return  # paused for approval; resumes via _continue()
+            else:
+                logger.warning("Unknown tool name: %s", fc.name)
+                self._add_result(fc, f"ERROR: Unknown tool '{fc.name}'.")
+        self._flush_results()
+
+    def _add_result(self, fc: types.FunctionCall, result: str) -> None:
+        self._batch_results.append(
+            types.Part(
+                function_response=types.FunctionResponse(
+                    id=fc.id or "", name=fc.name, response={"output": result}
+                )
+            )
         )
-        self._history.append(result_content)
-        self._set_state(OrchestratorState.IDLE)
+
+    def _skip_remaining(self, why: str) -> None:
+        """Answer the rest of the batch without running it."""
+        while self._batch:
+            fc = self._batch.popleft()
+            self._add_result(
+                fc,
+                f"SKIPPED: not run because {why}. Explain this to the user and ask before trying it again.",
+            )
+
+    def _continue(self) -> None:
+        """Resume the batch after a step finished, or hand results to the model."""
+        if self._batch:
+            # More calls queued: keep the UI locked and process them off the UI thread.
+            self._set_state(OrchestratorState.THINKING)
+            threading.Thread(target=self._process_next, daemon=True).start()
+        else:
+            self._set_state(OrchestratorState.IDLE)
+            self._flush_results()
+
+    def _flush_results(self) -> None:
+        """Send every answer from this batch back to the model in one turn."""
+        if not self._batch_results:
+            self._set_state(OrchestratorState.IDLE)
+            return
+        parts, self._batch_results = self._batch_results, []
+        self._history.append(types.Content(role="user", parts=parts))
         self._call_llm()
 
     # ------------------------------------------------------------------

@@ -62,6 +62,21 @@ _propose_shell_command = types.FunctionDeclaration(
                     "(pkexec / root). Prefer rootless alternatives whenever possible."
                 ),
             ),
+            "title": types.Schema(
+                type=types.Type.STRING,
+                description=(
+                    "Short outcome-focused title shown on the approval card, "
+                    "e.g. 'Install VLC media player'. Max ~6 words, no command syntax."
+                ),
+            ),
+            "effects": types.Schema(
+                type=types.Type.ARRAY,
+                items=types.Schema(type=types.Type.STRING),
+                description=(
+                    "2-4 plain-language bullet points describing what will change "
+                    "on the user's computer, e.g. 'Adds VLC to your app menu'."
+                ),
+            ),
         },
         required=["command", "explanation", "requires_root"],
     ),
@@ -126,7 +141,8 @@ _read_file_snippet = types.FunctionDeclaration(
         "Read up to max_lines lines from a file on the user's local filesystem. "
         "Use this to inspect config files, logs, or scripts before suggesting "
         "edits. This is a safe, read-only operation — no user approval is "
-        "required."
+        "required. Files that may hold secrets (SSH/GPG keys, keyrings, browser "
+        "profiles, .env files, shell history) are blocked; never try to read them."
     ),
     parameters=types.Schema(
         type=types.Type.OBJECT,
@@ -239,6 +255,21 @@ OPENAI_TOOLS: List[Dict[str, Any]] = [
                             "(pkexec / root). Prefer rootless alternatives whenever possible."
                         ),
                     },
+                    "title": {
+                        "type": "string",
+                        "description": (
+                            "Short outcome-focused title shown on the approval card, "
+                            "e.g. 'Install VLC media player'. Max ~6 words, no command syntax."
+                        ),
+                    },
+                    "effects": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "2-4 plain-language bullet points describing what will change "
+                            "on the user's computer, e.g. 'Adds VLC to your app menu'."
+                        ),
+                    },
                 },
                 "required": ["command", "explanation", "requires_root"],
             },
@@ -296,7 +327,9 @@ OPENAI_TOOLS: List[Dict[str, Any]] = [
             "name": "read_file_snippet",
             "description": (
                 "Read up to max_lines lines from a file on the user's local filesystem. "
-                "Safe, read-only operation — no user approval required."
+                "Safe, read-only operation — no user approval required. Files that may "
+                "hold secrets (SSH/GPG keys, keyrings, browser profiles, .env files, "
+                "shell history) are blocked; never try to read them."
             ),
             "parameters": {
                 "type": "object",
@@ -408,6 +441,11 @@ def normalize_tool_args(name: str, raw_args: Any) -> Dict[str, Any]:
             )
         else:
             args["requires_root"] = bool(args["requires_root"])
+        args["title"] = str(args.get("title") or "").strip()
+        effects = args.get("effects") or []
+        if isinstance(effects, str):
+            effects = [line.strip(" -•\t") for line in effects.splitlines()]
+        args["effects"] = [str(e).strip() for e in effects if str(e).strip()][:6]
 
     elif name == "create_desktop_entry":
         args.setdefault("app_name", str(args.get("name") or ""))
@@ -424,31 +462,90 @@ def normalize_tool_args(name: str, raw_args: Any) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+# Files the model may never read without the user pasting them in: they can
+# hold passwords, private keys, tokens or browsing data that would otherwise
+# be sent to a cloud AI provider. Checked against the *resolved* path, so a
+# symlink cannot be used to get around it.
+_SENSITIVE_DIRS = (
+    "~/.ssh", "~/.gnupg", "~/.pki", "~/.password-store", "~/.local/share/keyrings",
+    "~/.local/share/kwalletd", "~/.aws", "~/.azure", "~/.config/gcloud", "~/.kube",
+    "~/.docker", "~/.mozilla", "~/.thunderbird", "~/.config/google-chrome",
+    "~/.config/chromium", "~/.config/BraveSoftware", "~/.config/microsoft-edge",
+    "~/.config/vivaldi", "~/.config/opera", "~/.var/app", "~/.config/Signal",
+    "~/.config/discord", "~/.config/Slack", "~/.local/share/TelegramDesktop",
+    "~/.config/gh", "~/.config/hub", "~/.config/rclone", "~/.config/linux-helper",
+    "/etc/ssl/private", "/root",
+)
+_SENSITIVE_FILES = (
+    "~/.netrc", "~/.git-credentials", "~/.pgpass", "~/.my.cnf", "~/.npmrc", "~/.pypirc",
+    "~/.bash_history", "~/.zsh_history", "~/.python_history", "~/.local/share/fish/fish_history",
+    "/etc/shadow", "/etc/gshadow", "/etc/sudoers",
+)
+_SENSITIVE_NAME_RE = re.compile(
+    r"(^id_(rsa|dsa|ecdsa|ed25519)(?!.*\.pub$))|(\.(pem|key|p12|pfx|kdbx|keystore|jks)$)"
+    r"|(^\.env(\..*)?$)|(secret|credential|token|password)",
+    re.IGNORECASE,
+)
+_READ_LIMIT_LINES = 400
+
+
+def sensitive_path_reason(path: Path) -> str | None:
+    """Return why reading *path* (already resolved) is blocked, or None if allowed."""
+    resolved = str(path)
+    for d in _SENSITIVE_DIRS:
+        base = os.path.realpath(os.path.expanduser(d))
+        if resolved == base or resolved.startswith(base + os.sep):
+            return f"it is inside {d}, which can hold keys, passwords or browsing data"
+    for f in _SENSITIVE_FILES:
+        if resolved == os.path.realpath(os.path.expanduser(f)):
+            return "it can contain passwords or command history"
+    if resolved.startswith("/proc/") and resolved.endswith(("/environ", "/cmdline", "/mem")):
+        return "process environments can contain secrets"
+    if _SENSITIVE_NAME_RE.search(path.name):
+        return "its name suggests it holds a key, password or token"
+    return None
+
+
 def execute_read_file_snippet(file_path: str, max_lines: int = 100) -> str:
     """Execute the read_file_snippet tool locally (no approval required).
 
-    Returns the file contents as a string, or an error message prefixed with
-    'ERROR:' if the file cannot be read.
+    Returns up to *max_lines* lines, or a message prefixed with 'ERROR:' when
+    the file is missing, not text, or blocked because it may hold secrets.
     """
-    import os
-    from pathlib import Path
-
     expanded = Path(os.path.expanduser(file_path))
-    if not expanded.exists():
-        return f"ERROR: File not found: {file_path}"
-    if not expanded.is_file():
-        return f"ERROR: Path is not a regular file: {file_path}"
     try:
-        lines = expanded.read_text(encoding="utf-8", errors="replace").splitlines()
-        selected = lines[:max_lines]
-        suffix = (
-            f"\n[… {len(lines) - max_lines} more lines omitted]"
-            if len(lines) > max_lines
-            else ""
+        resolved = expanded.resolve(strict=True)
+    except (OSError, RuntimeError):
+        return f"ERROR: File not found: {file_path}"
+    reason = sensitive_path_reason(resolved)
+    if reason:
+        return (
+            f"ERROR: Reading {file_path} was blocked because {reason}. "
+            "Do not try to read it another way. If you need part of it, ask the user to paste "
+            "only the relevant, non-secret lines."
         )
-        return "\n".join(selected) + suffix
+    if not resolved.is_file():
+        return f"ERROR: Path is not a regular file: {file_path}"
+    limit = max(1, min(int(max_lines or 100), _READ_LIMIT_LINES))
+    try:
+        with resolved.open("rb") as fh:
+            head = fh.read(8192)
+            if b"\x00" in head:
+                return f"ERROR: {file_path} looks like a binary file, not text."
+            fh.seek(0)
+            lines: List[str] = []
+            more = False
+            for raw in fh:
+                if len(lines) >= limit:
+                    more = True
+                    break
+                lines.append(raw.decode("utf-8", errors="replace").rstrip("\n"))
+        return "\n".join(lines) + ("\n[… more lines omitted]" if more else "")
     except OSError as exc:
         return f"ERROR: Could not read file: {exc}"
+
+
+_MANUAL_TOPIC_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+:-]{0,63}$")
 
 
 def execute_inspect_manual(command_or_topic: str) -> str:
@@ -460,6 +557,11 @@ def execute_inspect_manual(command_or_topic: str) -> str:
     topic = command_or_topic.strip()
     if not topic:
         return "ERROR: No command or topic specified."
+    # One bare name only (e.g. 'nmcli', 'ip-link', 'systemd.unit'): never options
+    # or extra arguments, which `man` or the program itself could act on.
+    topic = topic.split()[0]
+    if not _MANUAL_TOPIC_RE.match(topic):
+        return f"ERROR: '{command_or_topic}' is not a valid command or manual page name."
 
     output = ""
     # 1. Try man -P cat <topic>
@@ -467,7 +569,7 @@ def execute_inspect_manual(command_or_topic: str) -> str:
     if man_path:
         try:
             res = subprocess.run(
-                [man_path, "-P", "cat", topic],
+                [man_path, "-P", "cat", "--", topic],
                 capture_output=True,
                 text=True,
                 timeout=5,
@@ -482,13 +584,13 @@ def execute_inspect_manual(command_or_topic: str) -> str:
 
     # 2. Fallback to <topic> --help
     if not output.strip():
-        parts = topic.split()
+        parts = [topic]
         if parts:
             cmd = parts[0]
             if shutil.which(cmd):
                 try:
                     res = subprocess.run(
-                        parts + ["--help"],
+                        [cmd, "--help"],
                         capture_output=True,
                         text=True,
                         timeout=5,
@@ -528,8 +630,16 @@ def render_desktop_entry(
     Does NOT write anything to disk — writing requires HITL approval and
     execution through create_desktop_entry().
     """
+    def _one_line(value: str) -> str:
+        # A newline in any field would let it inject extra keys (e.g. a second Exec=).
+        return " ".join(str(value or "").split())
+
+    app_name, categories, comment = _one_line(app_name), _one_line(categories), _one_line(comment)
+    exec_path, icon_path = _one_line(exec_path), _one_line(icon_path)
     resolved_exec = os.path.abspath(os.path.expanduser(exec_path)) if exec_path else ""
     resolved_icon = os.path.abspath(os.path.expanduser(icon_path)) if icon_path else ""
+    if " " in resolved_exec:
+        resolved_exec = '"' + resolved_exec.replace('\\', '\\\\').replace('"', '\\"') + '"'
 
     lines = [
         "[Desktop Entry]",

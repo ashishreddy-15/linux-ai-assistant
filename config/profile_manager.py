@@ -25,7 +25,7 @@ SECONDARY_PACKAGE_HELPERS = ("flatpak", "snap", "yay", "paru")
 DEFAULT_SKILL_LEVEL = "Intermediate"
 VALID_SKILL_LEVELS = ("Beginner", "Intermediate", "Advanced")
 
-DEFAULT_THEME = "dark"
+DEFAULT_THEME = "system"  # follow the desktop light/dark setting
 VALID_THEMES = ("dark", "light", "system")
 
 DEFAULT_PROVIDER = "groq"

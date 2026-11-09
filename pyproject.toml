@@ -1,14 +1,13 @@
 [project]
 name = "linux-ai-helper"
 version = "0.1.0"
-description = "A lightweight native Linux desktop GUI assistant"
+description = "A lightweight native Linux desktop GUI assistant (GTK4 / libadwaita)"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "google-genai>=0.1.0",
     "keyring>=24.0.0",
     "openai>=1.0.0",
-    "pywebview>=6.2.1",
 ]
 
 [build-system]
@@ -20,3 +19,12 @@ where = ["."]
 include = ["agent*", "config*", "executor*", "ui*"]
 
 
+
+[tool.setuptools.package-data]
+ui = ["style.css", "icons/hicolor/scalable/actions/*.svg"]
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

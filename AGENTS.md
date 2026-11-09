@@ -1,12 +1,12 @@
 # Project Architecture & Rules: Linux AI Assistant
 
 ## 1. Overview
-A lightweight native Linux desktop GUI assistant built with Python and pywebview (WebKitGTK). It assists users in installing packages, running diagnostics, and unpacking tarball applications (such as Postman) via an LLM with a strict Human-in-the-Loop (HITL) approval step and a live terminal log stream.
+A lightweight native Linux desktop GUI assistant built with Python and GTK4 / libadwaita (PyGObject). It assists users in installing packages, running diagnostics, and unpacking tarball applications (such as Postman) via an LLM with a strict Human-in-the-Loop (HITL) approval step and a live terminal log stream.
 
 ## 2. Tech Stack & Dependencies
 - Language: Python 3.11+ (Managed with `uv` or standard venv)
 - Package & Environment Manager: `uv` (recommended) or `pip`
-- GUI Framework: pywebview (WebKitGTK) — native desktop window with a modern, beginner-friendly HTML/CSS/JS frontend.
+- GUI Framework: GTK4 + libadwaita via system PyGObject (no embedded browser). Styling lives in `ui/style.css`; light/dark follows the system via `Adw.StyleManager`.
 - LLM Providers: Groq (via `openai` SDK, targeting `llama-3.3-70b-versatile`, `qwen-2.5-coder-32b`) and Google GenAI SDK (`google-genai`), targeting `gemini-3.8-flash`.
 - Secret Storage: Linux keyring via the Python `keyring` library.
 - Threading & Concurrency: All LLM networking and subprocess executions run on background daemon threads communicating via thread-safe signal/callback dispatch. Never block the UI loop.
@@ -29,10 +29,16 @@ linux-ai-helper/
 │   ├── askpass.py           # Zenity / kdialog graphical credential handler
 │   └── pty_runner.py        # Pseudo-terminal runner streaming stdout/stderr
 └── ui/
-    ├── bridge.py            # Python ↔ pywebview JavaScript API bridge
-    ├── index.html           # Single-page UI with chat column & terminal drawer
-    ├── app.css              # Obsidian / Raycast dark theme (#09090b canvas, #10b981 emerald)
-    └── app.js               # Frontend event dispatch, ANSI parser & markdown renderer
+    ├── app.py               # Adw.Application: CSS, icons, light/dark sync
+    ├── window.py            # Main window; orchestrator signals → GLib.idle_add
+    ├── home.py / chat.py    # Home screen and conversation view
+    ├── action_card.py       # HITL approval → running → result card
+    ├── onboarding.py        # First-run setup
+    ├── preferences.py       # Adw.PreferencesDialog
+    ├── controller.py        # GTK-free settings/provider logic (unit-tested)
+    ├── widgets.py           # Shared widgets (progress ring, terminal view, Markdown view)
+    ├── ansi.py / markup.py  # ANSI parser; escaped Markdown → Pango
+    └── style.css            # GTK CSS: shape/type only; ALL colours come from libadwaita variables
 
 ## 4. Engineering Invariants
 1. Human-in-the-Loop: The agent must never execute mutating actions (running shell commands, modifying disk) without UI approval. Every tool call must trigger an approval request signal.
@@ -42,3 +48,6 @@ linux-ai-helper/
    - Intermediate: Informative explanation with read-only command preview. Log pane visible.
    - Advanced: Compact technical summary with an editable command input before approval. Log pane visible.
 4. FreeDesktop Path Resolution: `.desktop` launcher files must contain absolute paths without unresolved tildes (`~`).
+5. UI Thread Safety: Orchestrator signals fire on worker threads; UI code must only touch widgets via `GLib.idle_add` (see `on_main_thread` in `ui/window.py`).
+6. No Markup Injection: Never pass model or command output to `set_markup` unescaped. Use `label()`/`set_text`, or `ui.markup.markdown_to_blocks`, which escapes first.
+7. Theme Colours: Never hard-code UI colours in `ui/style.css` or widgets. Use libadwaita variables (`--accent-color`, `--card-bg-color`, `--warning-color`, …) or `color-mix()` of them, so the app follows each user's light/dark setting, accent colour and custom theme.
