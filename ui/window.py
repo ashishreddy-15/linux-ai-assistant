@@ -153,6 +153,7 @@ class MainWindow(Adw.ApplicationWindow):
         o.command_output.connect(on_main_thread(self._on_output))
         o.command_finished.connect(on_main_thread(self._on_finished))
         o.error_occurred.connect(on_main_thread(self._chat.add_error))
+        o.tool_activity.connect(on_main_thread(self._chat.add_activity))
 
     # ------------------------------------------------------------------
     # Navigation

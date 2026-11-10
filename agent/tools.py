@@ -188,6 +188,25 @@ _inspect_manual = types.FunctionDeclaration(
     ),
 )
 
+_search_packages = types.FunctionDeclaration(
+    name="search_packages",
+    description=(
+        "Search for installable apps and packages by name. Returns exact Flatpak app IDs "
+        "from Flathub and exact system package names. Read-only, no approval needed. "
+        "ALWAYS call this before proposing an install, and use only IDs it returns."
+    ),
+    parameters=types.Schema(
+        type=types.Type.OBJECT,
+        properties={
+            "query": types.Schema(
+                type=types.Type.STRING,
+                description="App or package name to search for, e.g. 'vlc', 'postman', 'htop'.",
+            ),
+        },
+        required=["query"],
+    ),
+)
+
 # ---------------------------------------------------------------------------
 # Bundled tool list & metadata
 # ---------------------------------------------------------------------------
@@ -199,6 +218,7 @@ AGENT_TOOLS: types.Tool = types.Tool(
         _create_desktop_entry,
         _read_file_snippet,
         _inspect_manual,
+        _search_packages,
     ]
 )
 
@@ -215,6 +235,7 @@ MUTATING_TOOLS: frozenset[str] = frozenset({
 READONLY_TOOLS: frozenset[str] = frozenset({
     "read_file_snippet",
     "inspect_manual",
+    "search_packages",
 })
 
 #: Standard OpenAI-formatted tool schemas for Groq / OpenAI-compatible endpoints
@@ -381,7 +402,53 @@ OPENAI_TOOLS: List[Dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_packages",
+            "description": (
+                "Search for installable apps and packages by name. Returns exact Flatpak app IDs "
+                "from Flathub and exact system package names. Read-only, no approval needed. "
+                "ALWAYS call this before proposing an install, and use only IDs it returns."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "App or package name to search for, e.g. 'vlc', 'postman', 'htop'.",
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
 ]
+
+
+_PM_ROOT_RE = re.compile(
+    r"^(?P<pm>dnf|dnf5|yum|apt|apt-get|zypper|pacman)\s+(?:-\S+\s+)*"
+    r"(?P<sub>install|reinstall|remove|erase|purge|autoremove|upgrade|update|"
+    r"distro-sync|dist-upgrade|full-upgrade|refresh|in|rm|up|dup|-S\S*|-R\S*|-U\S*)\b"
+)
+
+
+def ensure_root_for_package_managers(command: str) -> tuple[str, bool]:
+    """Prefix sudo to system package-manager changes that lack it.
+
+    Small models often write `dnf install -y htop`, which can only fail
+    without root. Returns (command, changed). Each `&&`/`;` segment is checked;
+    the user still sees the final command on the approval card.
+    """
+    changed = False
+    parts = re.split(r"(\s*(?:&&|\|\||;)\s*)", command)
+    for i in range(0, len(parts), 2):
+        segment = parts[i]
+        stripped = segment.lstrip()
+        if _PM_ROOT_RE.match(stripped):
+            parts[i] = segment[: len(segment) - len(stripped)] + "sudo " + stripped
+            changed = True
+    return "".join(parts), changed
 
 
 def normalize_tool_args(name: str, raw_args: Any) -> Dict[str, Any]:
@@ -441,11 +508,21 @@ def normalize_tool_args(name: str, raw_args: Any) -> Dict[str, Any]:
             )
         else:
             args["requires_root"] = bool(args["requires_root"])
+        args["command"], needs_root = ensure_root_for_package_managers(str(args["command"]))
+        if needs_root:
+            args["requires_root"] = True
         args["title"] = str(args.get("title") or "").strip()
         effects = args.get("effects") or []
         if isinstance(effects, str):
             effects = [line.strip(" -•\t") for line in effects.splitlines()]
         args["effects"] = [str(e).strip() for e in effects if str(e).strip()][:6]
+
+    elif name == "search_packages":
+        val = (
+            args.get("query") or args.get("name") or args.get("package")
+            or args.get("app") or args.get("term") or args.get("search")
+        )
+        args = {"query": str(val or "").strip()}
 
     elif name == "create_desktop_entry":
         args.setdefault("app_name", str(args.get("name") or ""))

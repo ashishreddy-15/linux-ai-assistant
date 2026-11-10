@@ -81,6 +81,12 @@ class ChatView(Gtk.ScrolledWindow):
                 self._column.remove(self._live)
             self._live = None
 
+    def add_activity(self, text: str) -> None:
+        """A quiet line for read-only lookups the assistant made on its own."""
+        line = mono(f"↳ {text}", ("la-muted", "la-small"))
+        line.set_margin_start(2)
+        self._append(line)
+
     def add_card(self, card: Gtk.Widget) -> None:
         self._append(card)
 

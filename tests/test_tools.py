@@ -33,13 +33,13 @@ class TestToolDeclarations(unittest.TestCase):
         self.assertIsInstance(AGENT_TOOLS, types.Tool)
 
     def test_tool_declarations_count(self):
-        self.assertEqual(len(AGENT_TOOLS.function_declarations), 4)
+        self.assertEqual(len(AGENT_TOOLS.function_declarations), 5)
 
     def test_all_tools_alias(self):
         self.assertIs(ALL_TOOLS, AGENT_TOOLS)
 
     def test_openai_tools_registered(self):
-        self.assertEqual(len(OPENAI_TOOLS), 4)
+        self.assertEqual(len(OPENAI_TOOLS), 5)
         names = {t["function"]["name"] for t in OPENAI_TOOLS}
         self.assertEqual(
             names,
@@ -48,6 +48,7 @@ class TestToolDeclarations(unittest.TestCase):
                 "create_desktop_entry",
                 "read_file_snippet",
                 "inspect_manual",
+                "search_packages",
             },
         )
 

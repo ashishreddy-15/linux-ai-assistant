@@ -62,6 +62,7 @@ _SHORT_DESCRIPTIONS = {
     "create_desktop_entry": "Propose adding an app launcher to the user's app menu.",
     "read_file_snippet": "Read the first lines of a text file (read-only, no approval needed).",
     "inspect_manual": "Show the man page or --help for one command name (read-only).",
+    "search_packages": "Find exact app IDs and package names (read-only). Use before every install.",
 }
 
 

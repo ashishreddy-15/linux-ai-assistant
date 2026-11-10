@@ -52,6 +52,7 @@ from google.genai import types
 
 from agent.events import Signal, Slot
 from agent.llm_client import BaseLLMClient, GeminiAgentClient
+from agent.package_search import execute_search_packages
 from agent.tools import (
     MUTATING_TOOLS,
     READONLY_TOOLS,
@@ -104,6 +105,9 @@ class AgentOrchestrator:
         self.command_finished: Signal = Signal(int, str)
         self.error_occurred: Signal = Signal(str)
         self.state_changed: Signal = Signal(str)
+        # Read-only lookups run without approval; this tells the UI what the
+        # assistant looked at (e.g. "read ~/.bashrc") so nothing is hidden.
+        self.tool_activity: Signal = Signal(str)
 
         self._client = llm_client
         self._history: List[types.Content] = []
@@ -289,10 +293,16 @@ class AgentOrchestrator:
         if fc.name == "read_file_snippet":
             file_path = args.get("file_path", "")
             max_lines = int(args.get("max_lines", 100))
+            self.tool_activity.emit(f"read {file_path}")
             result = execute_read_file_snippet(file_path, max_lines)
         elif fc.name == "inspect_manual":
             topic = args.get("command_or_topic", "")
+            self.tool_activity.emit(f"looked up the manual for {topic}")
             result = execute_inspect_manual(topic)
+        elif fc.name == "search_packages":
+            query = args.get("query", "")
+            self.tool_activity.emit(f"searched packages for “{query}”")
+            result = execute_search_packages(query)
         else:
             result = f"ERROR: Unhandled readonly tool '{fc.name}'."
 

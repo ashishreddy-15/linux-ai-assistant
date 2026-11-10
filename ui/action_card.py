@@ -22,6 +22,7 @@ gi.require_version("Gtk", "4.0")
 from gi.repository import GLib, Gdk, Gtk  # noqa: E402
 
 from executor.pty_runner import is_high_risk  # noqa: E402
+from ui.card_text import primary_label_for  # noqa: E402
 from ui.widgets import MarkdownView, TerminalView, glow_line, label, mono, status_line  # noqa: E402
 
 _ROOT_RE = re.compile(r"(^|[\s;&|(])(sudo|pkexec|doas|su)\b")
@@ -241,8 +242,7 @@ class ActionCard(Gtk.Box):
             return "Add to app menu"
         if self._skill == "Advanced":
             return "Run"
-        first = str(self._payload.get("title") or "").split(" ")[0]
-        return first if first.isalpha() and len(first) <= 12 else "Run"
+        return primary_label_for(str(self._payload.get("title") or ""))
 
     # ------------------------------------------------------------------
     # Risk presentation

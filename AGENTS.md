@@ -17,6 +17,9 @@ linux-ai-helper/
 ├── AGENTS.md
 ├── pyproject.toml
 ├── main.py
+├── scripts/
+│   ├── install-ollama-user.sh  # No-sudo Ollama install used by in-app setup
+│   └── eval_local.py           # 12-task evaluation of local models
 ├── config/
 │   ├── profile_manager.py   # Stores/reads ~/.config/linux-helper/system_profile.json
 │   └── keyring_manager.py   # Secure API key handling via system keyring
@@ -25,6 +28,7 @@ linux-ai-helper/
 │   ├── llm_client.py        # Multi-provider LLM client wrappers
 │   ├── local_llm.py         # Ollama native client: context size, streaming, text tool-call recovery
 │   ├── local_setup.py       # Detect Ollama/models/GPU; install, start and pull steps as approval cards
+│   ├── package_search.py    # search_packages tool: Flathub API + dnf/apt/pacman/zypper (read-only)
 │   ├── prompts.py           # Dynamic system prompts (Beginner, Intermediate, Advanced)
 │   ├── tools.py             # Declarations for shell proposals & desktop file creation
 │   └── orchestrator.py      # HITL state machine pausing on mutating actions

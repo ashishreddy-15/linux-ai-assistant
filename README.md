@@ -176,6 +176,20 @@ The default is **`qwen3.5:4b`** (3.3 GB): it uses tools reliably with thinking t
 - Replies stream into the chat; tool calls that a model writes as text are recovered; a "question" proposed as an `echo` command is shown as a normal question.
 - 8 CPU threads instead of Ollama's default (which can be 2 on hybrid laptop chips).
 
+### Real package names, not guesses
+
+Small models invent IDs (for example `org.postman.Postman` instead of Flathub's real `com.getpostman.Postman`). Before proposing an install the model calls the read-only **`search_packages`** tool, which looks up exact Flatpak IDs through Flathub's public search API and exact package names through `dnf`, `apt`, `pacman` or `zypper`. It also notices when Flathub isn't set up yet and gives the model the command to add it. The search term is sent to flathub.org (as `flatpak search` would do); nothing else leaves the computer.
+
+Read-only lookups run without approval, so the chat shows each one as a quiet line (`↳ searched packages for “postman”`, `↳ read ~/.bashrc`).
+
+### Evaluating models
+
+```bash
+uv run python scripts/eval_local.py qwen3.5:4b [another-model …]
+```
+
+Runs 12 typical tasks through the app's real client and prompt, executing read-only lookups for real and checking (never running) the proposed commands, including exact app IDs.
+
 ### Measured speed (Core Ultra 5 125U, 16 GB, `qwen3.5:4b`)
 
 | | Reading the prompt | Writing |

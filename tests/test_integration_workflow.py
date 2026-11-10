@@ -237,7 +237,7 @@ class TestIntegrationWorkflow(unittest.TestCase):
         self.assertEqual(self.orchestrator.state, OrchestratorState.AWAITING_APPROVAL)
         self.assertEqual(len(approval_requests), 2)
         corrective_payload = approval_requests[1]
-        self.assertEqual(corrective_payload["command"], "pacman -S linux-headers")
+        self.assertEqual(corrective_payload["command"], "sudo pacman -S linux-headers")  # root added automatically
         self.assertTrue(corrective_payload["requires_root"])
 
         # 4. User approves corrective action -> succeeds

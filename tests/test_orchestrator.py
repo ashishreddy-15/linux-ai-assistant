@@ -148,7 +148,7 @@ class TestOrchestratorStateMachine(unittest.TestCase):
         self.assertEqual(len(approval_payloads), 1)
         payload = approval_payloads[0]
         self.assertEqual(payload["tool_name"], "propose_shell_command")
-        self.assertEqual(payload["command"], "pacman -S neovim")
+        self.assertEqual(payload["command"], "sudo pacman -S neovim")  # root added automatically
         self.assertFalse(payload["high_risk"])
 
     def test_propose_shell_command_sets_awaiting_approval_state(self):

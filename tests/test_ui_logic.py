@@ -156,6 +156,16 @@ class TestController(unittest.TestCase):
             self.ctl.set_skill_level("Wizard")
 
 
+class TestPrimaryLabel(unittest.TestCase):
+    def test_labels(self):
+        from ui.card_text import primary_label_for
+
+        for title, want in (("Install VLC media player", "Install"), ("Set up Flathub", "Set up"),
+                            ("Check free disk space", "Check"), ("Wifi status", "Run"), ("", "Run")):
+            with self.subTest(title=title):
+                self.assertEqual(primary_label_for(title), want)
+
+
 class TestApprovalPayload(unittest.TestCase):
     def test_title_and_effects_normalised(self):
         args = normalize_tool_args("propose_shell_command", {
