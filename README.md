@@ -139,7 +139,17 @@ Dependencies include:
 
 The assistant is built to run on a **local model through [Ollama](https://ollama.com)**: free, private (nothing leaves your computer) and offline. Cloud providers remain available in Preferences.
 
-### Install Ollama without sudo
+### Set it up from the app
+
+Choose **Private, on this computer** during setup (or Preferences → AI → Set up…). The app checks what is missing and proposes each step as an approval card, exactly like any other command:
+
+1. **Install Ollama** into `~/.local/opt/ollama` with `scripts/install-ollama-user.sh` (official GitHub release, SHA-256 verified, CUDA libraries skipped without an NVIDIA GPU; no sudo).
+2. **Start it**: a systemd *user* service (`~/.config/systemd/user/ollama.service`, only reachable from this computer, integrated GPU enabled), or a background process when there is no user systemd.
+3. **Download a model** sized to your memory: `qwen3.5:2b` (≤ 8 GB), `qwen3.5:4b` (≤ 24 GB), `qwen3.5:9b` (more).
+
+Finally it confirms the model really calls tools before switching the assistant to it.
+
+### Install Ollama manually (without sudo)
 
 ```bash
 # Download the official release, check it against the release's sha256sum.txt, then:

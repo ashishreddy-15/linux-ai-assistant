@@ -45,7 +45,7 @@ class HomePage(Gtk.Box):
         heads.append(label("What do you want to do?", ("la-heading",)))
         col.append(heads)
 
-        self._setup = Gtk.Button(label="Set up an AI to get started", halign=Gtk.Align.START, visible=False)
+        self._setup = Gtk.Button(label="Set up the AI to get started", halign=Gtk.Align.START, visible=False)
         self._setup.add_css_class("la-button")
         self._setup.add_css_class("suggested-action")
         self._setup.connect("clicked", lambda *_: on_setup_ai())

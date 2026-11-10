@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Callable, List
+from typing import Callable, List, Optional
 
 import gi
 
@@ -24,10 +24,16 @@ THEMES = (("system", "Follow system"), ("light", "Light"), ("dark", "Dark"))
 
 
 class PreferencesDialog(Adw.PreferencesDialog):
-    def __init__(self, controller: AppController, on_changed: Callable[[], None]) -> None:
+    def __init__(
+        self,
+        controller: AppController,
+        on_changed: Callable[[], None],
+        on_local_setup: Optional[Callable[[], None]] = None,
+    ) -> None:
         super().__init__(title="Preferences", search_enabled=False)
         self._controller = controller
         self._on_changed = on_changed
+        self._on_local_setup = on_local_setup
         self._loading = True
         self.add(self._general_page())
         self.add(self._ai_page())
@@ -86,6 +92,10 @@ class PreferencesDialog(Adw.PreferencesDialog):
         group.add(self._key_row)
 
         self._status_row = Adw.ActionRow(title="Status")
+        self._setup_local_btn = Gtk.Button(label="Set up…", valign=Gtk.Align.CENTER, visible=False)
+        self._setup_local_btn.add_css_class("flat")
+        self._setup_local_btn.connect("clicked", lambda *_: self._open_local_setup())
+        self._status_row.add_suffix(self._setup_local_btn)
         group.add(self._status_row)
         page.add(group)
         self._sync_provider_rows(active, self._controller.profile().get("model_name"))
@@ -132,6 +142,11 @@ class PreferencesDialog(Adw.PreferencesDialog):
         self._fill_system_rows()
         self.add_toast(Adw.Toast(title="System info refreshed"))
 
+    def _open_local_setup(self) -> None:
+        if self._on_local_setup is not None:
+            self.close()
+            self._on_local_setup()
+
     def _set_skill(self, level: str) -> None:
         if not self._loading:
             self._controller.set_skill_level(level)
@@ -159,8 +174,9 @@ class PreferencesDialog(Adw.PreferencesDialog):
         self._key_row.set_visible(not is_local)
         self._key_row.set_text("")
         has_key = bool(get_api_key(provider))
+        self._setup_local_btn.set_visible(is_local and self._on_local_setup is not None)
         if is_local:
-            self._status_row.set_subtitle("Runs on this computer. Make sure Ollama is running.")
+            self._status_row.set_subtitle("Runs on this computer. Use “Set up…” to install, start or download a model.")
         else:
             self._status_row.set_subtitle("Key saved" if has_key else "No key yet — paste one above and press ✓")
 

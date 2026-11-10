@@ -129,7 +129,11 @@ class AppController:
 
     def has_usable_ai(self) -> bool:
         provider = self.active_provider()
-        return provider == "ollama" or bool(get_api_key(provider))
+        if provider == "ollama":
+            from agent.local_llm import installed_models, server_version
+
+            return server_version() is not None and bool(installed_models())
+        return bool(get_api_key(provider))
 
     def needs_onboarding(self) -> bool:
         profile = self.profile()

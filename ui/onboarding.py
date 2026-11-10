@@ -7,10 +7,11 @@ from typing import Callable, Optional
 import gi
 
 gi.require_version("Gtk", "4.0")
-from gi.repository import Gtk  # noqa: E402
+from gi.repository import GLib, Gtk  # noqa: E402
 
 from config.provider_registry import PROVIDER_CONFIGS  # noqa: E402
 from ui.controller import SKILL_LABELS, AppController  # noqa: E402
+from ui.local_setup import LocalSetupView  # noqa: E402
 from ui.widgets import clamp, glow_line, label, mono, open_uri, run_in_thread  # noqa: E402
 
 
@@ -20,12 +21,14 @@ class Onboarding(Gtk.Box):
         self._controller = controller
         self._on_finished = on_finished
         self._skill = controller.skill_level()
-        self._provider = "groq"
+        self._provider = "ollama"
         self._key_ok = False
+        self._local_model: Optional[str] = None
 
         self._stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE, vexpand=True)
         self._stack.add_named(self._skill_page(), "skill")
         self._stack.add_named(self._connect_page(), "connect")
+        self._local_page: Optional[Gtk.Widget] = None
         self.append(self._stack)
 
     # ------------------------------------------------------------------
@@ -101,13 +104,31 @@ class Onboarding(Gtk.Box):
     def _connect_page(self) -> Gtk.Widget:
         page, options, footer = self._page(
             2, "Choose the AI behind the assistant",
-            "Both are free. Keys are stored in your system keyring, never in a file.",
+            "Both are free. The local AI keeps everything on this computer.",
         )
+        local = self._option(
+            "Private, on this computer",
+            "Works offline and nothing leaves your computer. The app sets it up for you: "
+            "a one-time download of about 5 GB.",
+            None, tag="ollama · recommended",
+        )
+        local.set_active(True)
+        options.append(local)
+        self._local_status = mono("", ("la-key-status", "la-small"))
+        self._local_status.set_visible(False)
+        self._local_status.set_margin_start(36)
+        options.append(self._local_status)
+        self._setup_btn = self._button("Set up the local AI", "la-outline")
+        self._setup_btn.set_halign(Gtk.Align.START)
+        self._setup_btn.set_margin_start(36)
+        self._setup_btn.set_visible(False)
+        self._setup_btn.connect("clicked", lambda *_: self._open_local_setup())
+        options.append(self._setup_btn)
+
         cloud = self._option(
-            "Free cloud AI", "Fast on any computer. Needs a free account, about two minutes.",
-            None, tag="groq · recommended",
+            "Free cloud AI", "Fast on any computer. Needs a free account and an internet connection.",
+            local, tag="groq",
         )
-        cloud.set_active(True)
         options.append(cloud)
 
         self._key_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -141,17 +162,7 @@ class Onboarding(Gtk.Box):
         self._status.set_visible(False)
         self._key_box.append(self._status)
         options.append(self._key_box)
-
-        local = self._option(
-            "Private, on this computer",
-            "Nothing leaves your computer. Needs a recent machine and a ~5 GB download.",
-            cloud, tag="ollama",
-        )
-        options.append(local)
-        self._local_status = mono("", ("la-key-status", "la-small"))
-        self._local_status.set_visible(False)
-        self._local_status.set_margin_start(36)
-        options.append(self._local_status)
+        self._key_box.set_visible(False)
 
         cloud.connect("toggled", lambda b: b.get_active() and self._set_provider("groq"))
         local.connect("toggled", lambda b: b.get_active() and self._set_provider("ollama"))
@@ -167,7 +178,25 @@ class Onboarding(Gtk.Box):
         self._done_btn.set_sensitive(False)
         self._done_btn.connect("clicked", lambda *_: self._finish(save_provider=True))
         footer.append(self._done_btn)
+        GLib.idle_add(lambda: (self._check(), GLib.SOURCE_REMOVE)[1])
         return page
+
+    def _open_local_setup(self) -> None:
+        if self._local_page is not None:
+            self._stack.remove(self._local_page)
+        self._local_page = LocalSetupView(
+            self._controller,
+            on_ready=self._local_ready,
+            on_cancel=lambda: self._stack.set_visible_child_name("connect"),
+            cancel_label="Back",
+        )
+        self._stack.add_named(self._local_page, "local")
+        self._stack.set_visible_child_name("local")
+
+    def _local_ready(self, model: str) -> None:
+        self._controller.set_provider("ollama", model_name=model)
+        self._controller.complete_onboarding()
+        self._on_finished()
 
     # ------------------------------------------------------------------
 
@@ -177,6 +206,7 @@ class Onboarding(Gtk.Box):
 
     def _set_provider(self, provider: str) -> None:
         self._provider = provider
+        self._setup_btn.set_visible(False)
         self._key_box.set_visible(provider == "groq")
         self._local_status.set_visible(provider == "ollama")
         self._reset_key_status()
@@ -185,6 +215,7 @@ class Onboarding(Gtk.Box):
 
     def _reset_key_status(self) -> None:
         self._key_ok = False
+        self._local_model: Optional[str] = None
         self._done_btn.set_sensitive(False)
         self._key_glow.remove_css_class("on")
         for lbl in (self._status, self._local_status):
@@ -192,6 +223,7 @@ class Onboarding(Gtk.Box):
             lbl.set_visible(False)
             lbl.remove_css_class("ok")
             lbl.remove_css_class("error")
+            lbl.remove_css_class("la-muted")
 
     def _check(self) -> None:
         provider = self._provider
@@ -210,12 +242,17 @@ class Onboarding(Gtk.Box):
             if isinstance(result, Exception):
                 ok, message = False, str(result)
             else:
-                ok, message, _models = result  # type: ignore[misc]
-            if provider == "ollama" and not ok:
-                message = "Ollama isn't running. Install it from ollama.com, then select this again."
+                ok, message, models = result  # type: ignore[misc]
+                if provider == "ollama" and ok and models:
+                    self._local_model = models[0]
+            if provider == "ollama":
+                self._setup_btn.set_visible(not ok)
+                if not ok:
+                    message = "Not set up yet. The app can do it for you."
             self._key_ok = ok
             target.set_text(("✓ " if ok else "") + message.lower() if ok else message)
-            target.add_css_class("ok" if ok else "error")
+            neutral = provider == "ollama" and not ok  # "not set up yet" isn't an error
+            target.add_css_class("ok" if ok else ("la-muted" if neutral else "error"))
             if ok and provider == "groq":
                 self._key_glow.add_css_class("on")
             self._done_btn.set_sensitive(ok)
@@ -224,7 +261,9 @@ class Onboarding(Gtk.Box):
 
     def _finish(self, save_provider: bool) -> None:
         if save_provider and self._key_ok:
-            key = self._key_entry.get_text().strip() if self._provider != "ollama" else None
-            self._controller.set_provider(self._provider, api_key=key)
+            if self._provider == "ollama":
+                self._controller.set_provider("ollama", model_name=self._local_model)
+            else:
+                self._controller.set_provider(self._provider, api_key=self._key_entry.get_text().strip())
         self._controller.complete_onboarding()
         self._on_finished()

@@ -15,6 +15,7 @@ from ui.action_card import ActionCard  # noqa: E402
 from ui.chat import ChatView  # noqa: E402
 from ui.controller import AppController  # noqa: E402
 from ui.home import HomePage  # noqa: E402
+from ui.local_setup import LocalSetupDialog  # noqa: E402
 from ui.onboarding import Onboarding  # noqa: E402
 from ui.preferences import PreferencesDialog  # noqa: E402
 from ui.widgets import APP_ICON, clamp, glow_line, label, mono  # noqa: E402
@@ -92,7 +93,7 @@ class MainWindow(Adw.ApplicationWindow):
         view.add_top_bar(self._header)
 
         self._pages = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE, vexpand=True)
-        self._home = HomePage(self._send, self._open_preferences)
+        self._home = HomePage(self._send, self._setup_ai)
         chat_page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self._chat = ChatView(self._open_preferences)
         chat_page.append(self._chat)
@@ -192,7 +193,21 @@ class MainWindow(Adw.ApplicationWindow):
         self._home.focus()
 
     def _open_preferences(self) -> None:
-        PreferencesDialog(self._controller, self._refresh_home).present(self)
+        PreferencesDialog(self._controller, self._refresh_home, self._open_local_setup).present(self)
+
+    def _setup_ai(self) -> None:
+        if self._controller.active_provider() == "ollama":
+            self._open_local_setup()
+        else:
+            self._open_preferences()
+
+    def _open_local_setup(self) -> None:
+        def ready(model: str) -> None:
+            self._controller.set_provider("ollama", model_name=model)
+            self._refresh_home()
+            self._toasts.add_toast(Adw.Toast(title=f"Local AI ready: {model}"))
+
+        LocalSetupDialog(self._controller, ready).present(self)
 
     def _about(self) -> None:
         Adw.AboutDialog(

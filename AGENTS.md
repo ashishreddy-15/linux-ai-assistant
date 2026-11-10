@@ -24,6 +24,7 @@ linux-ai-helper/
 │   ├── events.py            # Pure-Python Signal/Slot event dispatcher
 │   ├── llm_client.py        # Multi-provider LLM client wrappers
 │   ├── local_llm.py         # Ollama native client: context size, streaming, text tool-call recovery
+│   ├── local_setup.py       # Detect Ollama/models/GPU; install, start and pull steps as approval cards
 │   ├── prompts.py           # Dynamic system prompts (Beginner, Intermediate, Advanced)
 │   ├── tools.py             # Declarations for shell proposals & desktop file creation
 │   └── orchestrator.py      # HITL state machine pausing on mutating actions
@@ -36,6 +37,7 @@ linux-ai-helper/
     ├── home.py / chat.py    # Home screen and conversation view
     ├── action_card.py       # HITL approval → running → result card
     ├── onboarding.py        # First-run setup
+    ├── local_setup.py       # Local AI setup view/dialog (runs the setup cards)
     ├── preferences.py       # Adw.PreferencesDialog
     ├── controller.py        # GTK-free settings/provider logic (unit-tested)
     ├── widgets.py           # Shared widgets (progress ring, terminal view, Markdown view)
