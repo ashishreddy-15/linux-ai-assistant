@@ -25,7 +25,7 @@ Signal/Slot contract (UI ↔ Orchestrator):
     abort()
 
   Signals emitted TO the UI:
-    response_chunk(str)         – incremental text from the model
+    response_chunk(str)         – incremental text while a streaming model generates
     response_ready(str)         – full model text turn complete
     approval_requested(dict)    – pausing for HITL; dict has full spec
     command_output(str)         – live PTY output chunk
@@ -233,7 +233,9 @@ class AgentOrchestrator:
 
         def _worker() -> None:
             try:
-                resp = self._client.generate(self._history)
+                resp = self._client.generate(
+                    list(self._history), on_chunk=self.response_chunk.emit
+                )
                 self._on_llm_response(resp)
             except Exception as exc:
                 logger.exception("LLM call failed")
@@ -258,7 +260,8 @@ class AgentOrchestrator:
 
         # Emit text if present
         if text:
-            self.response_chunk.emit(text)
+            # Streaming clients already sent response_chunk while generating;
+            # response_ready always carries the final, complete text.
             self.response_ready.emit(text)
 
         if not function_calls:

@@ -37,12 +37,14 @@ class ChatView(Gtk.ScrolledWindow):
         self._column.set_margin_start(24)
         self._column.set_margin_end(24)
         self._typing: Optional[Gtk.Widget] = None
+        self._live: Optional[Gtk.Label] = None
         self.set_child(clamp(self._column, 688))  # 640 of content + margins
 
     def clear(self) -> None:
         while (child := self._column.get_first_child()) is not None:
             self._column.remove(child)
         self._typing = None
+        self._live = None
 
     def add_user(self, text: str) -> None:
         bubble = Gtk.Box(halign=Gtk.Align.END)
@@ -53,7 +55,31 @@ class ChatView(Gtk.ScrolledWindow):
         self._append(bubble)
 
     def add_assistant(self, text: str) -> None:
-        self._append(MarkdownView(text))
+        """Show a finished reply, replacing the streamed draft if there is one."""
+        view = MarkdownView(text)
+        if self._live is not None:
+            self._column.insert_child_after(view, self._live)
+            self._column.remove(self._live)
+            self._live = None
+            GLib.timeout_add(50, self._scroll_to_end)
+        else:
+            self._append(view)
+
+    def stream(self, chunk: str) -> None:
+        """Append streamed text to a plain draft label (formatted when done)."""
+        if self._live is None:
+            self.set_typing(False)
+            self._live = label("", ("la-prose",), selectable=True)
+            self._append(self._live)
+        self._live.set_text(self._live.get_text() + chunk)
+        GLib.timeout_add(30, self._scroll_to_end)
+
+    def end_stream(self) -> None:
+        """Drop an unfinished draft (e.g. the reply turned out to be a tool call)."""
+        if self._live is not None:
+            if not self._live.get_text().strip():
+                self._column.remove(self._live)
+            self._live = None
 
     def add_card(self, card: Gtk.Widget) -> None:
         self._append(card)

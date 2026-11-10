@@ -20,7 +20,7 @@ import logging
 import random
 import time
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from google import genai
 from google.genai import errors, types
@@ -32,14 +32,14 @@ logger = logging.getLogger(__name__)
 
 GEMINI_DEFAULT_MODEL = "gemini-3.8-flash"
 GROQ_DEFAULT_MODEL = "llama-3.3-70b-versatile"
-OLLAMA_DEFAULT_MODEL = "qwen2.5-coder:7b"
+OLLAMA_DEFAULT_MODEL = "qwen3.5:4b"
 MODEL_ID = GEMINI_DEFAULT_MODEL
 
 FALLBACK_MODELS: Dict[str, List[str]] = {
     k: list(v.get("fallback_models", [])) for k, v in PROVIDER_CONFIGS.items()
 }
 FALLBACK_MODELS["ollama"] = [
-    "qwen2.5-coder:7b",
+    "qwen3.5:4b",
     "llama3.2:3b",
     "mistral:7b",
 ]
@@ -102,6 +102,7 @@ class BaseLLMClient(ABC):
     def generate(
         self,
         history: List[types.Content],
+        on_chunk: Optional[Callable[[str], None]] = None,
     ) -> types.GenerateContentResponse:
         """Send the full conversation history to the model and return the response."""
         pass
@@ -237,6 +238,7 @@ class GeminiAgentClient(BaseLLMClient):
     def generate(
         self,
         history: List[types.Content],
+        on_chunk: Optional[Callable[[str], None]] = None,
     ) -> types.GenerateContentResponse:
         """Send the full conversation history to Gemini and return the response."""
         last_exception: Optional[Exception] = None
@@ -439,6 +441,7 @@ class OpenAIAgentClient(BaseLLMClient):
     def generate(
         self,
         history: List[types.Content],
+        on_chunk: Optional[Callable[[str], None]] = None,
     ) -> types.GenerateContentResponse:
         """Send the full conversation history to Groq and return GenerateContentResponse."""
         messages = self._history_to_messages(history)
@@ -562,14 +565,10 @@ def create_llm_client(
         return GeminiAgentClient(api_key=api_key, system_prompt=system_prompt, model=model)
 
     elif prov == "ollama":
-        model = model_name or OLLAMA_DEFAULT_MODEL
-        dummy_key = api_key or "ollama"
-        return OpenAIAgentClient(
-            api_key=dummy_key,
-            system_prompt=system_prompt,
-            model=model,
-            base_url="http://127.0.0.1:11434/v1",
-        )
+        # Native Ollama API: lets us set the context window and stream tokens.
+        from agent.local_llm import OllamaAgentClient
+
+        return OllamaAgentClient(system_prompt=system_prompt, model=model_name or OLLAMA_DEFAULT_MODEL)
 
     elif prov in PROVIDER_CONFIGS:
         cfg = PROVIDER_CONFIGS[prov]

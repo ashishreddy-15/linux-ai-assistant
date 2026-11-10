@@ -31,14 +31,14 @@ VALID_THEMES = ("dark", "light", "system")
 DEFAULT_PROVIDER = "groq"
 DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
 DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
-DEFAULT_OLLAMA_MODEL = "qwen2.5-coder:7b"
+DEFAULT_OLLAMA_MODEL = "qwen3.5:4b"
 VALID_PROVIDERS = tuple(list(PROVIDER_CONFIGS.keys()) + ["ollama"])
 
 PROVIDER_MODELS = {
     k: list(v.get("fallback_models", [])) for k, v in PROVIDER_CONFIGS.items()
 }
 PROVIDER_MODELS["ollama"] = [
-    "qwen2.5-coder:7b",
+    "qwen3.5:4b",
     "llama3.2:3b",
     "mistral:7b",
 ]

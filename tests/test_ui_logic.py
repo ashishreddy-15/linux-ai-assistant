@@ -102,14 +102,29 @@ class TestController(unittest.TestCase):
         self.assertIn("gsk_", message)
         net.assert_not_called()
 
-    def test_ollama_status_tuple_is_unpacked(self):
-        with patch("ui.controller.check_ollama_status", return_value=(False, "down")):
-            ok, _msg, models = self.ctl.test_key("ollama", "")
+    def test_local_model_checks(self):
+        with patch("agent.local_llm.server_version", return_value=None):
+            ok, msg, models = self.ctl.test_key("ollama", "")
         self.assertFalse(ok)
-        self.assertEqual(models, [])
+        self.assertIn("isn't running", msg)
+
+        with patch("agent.local_llm.server_version", return_value="0.40"), \
+             patch("agent.local_llm.installed_models", return_value=[]):
+            ok, msg, _ = self.ctl.test_key("ollama", "")
+        self.assertFalse(ok)
+        self.assertIn("ollama pull", msg)
+
+        with patch("agent.local_llm.server_version", return_value="0.40"), \
+             patch("agent.local_llm.installed_models", return_value=["llama3.2:3b", "qwen3.5:4b"]), \
+             patch("agent.local_llm.model_supports_tools", return_value=True), \
+             patch("agent.local_llm.probe_tool_calling", return_value=(True, "ok")):
+            ok, msg, models = self.ctl.test_key("ollama", "")
+        self.assertTrue(ok)
+        self.assertEqual(models[0], "qwen3.5:4b")  # recommended model ranked first
+        self.assertIn("qwen3.5:4b", msg)
 
     def test_set_skill_level_updates_prompt(self):
-        with patch("ui.controller.load_profile", return_value={}), \
+        with patch("ui.controller.load_profile", return_value={"active_provider": "groq"}), \
              patch("ui.controller.save_profile") as save, \
              patch("ui.controller.build_system_prompt", return_value="PROMPT"):
             self.orch.update_system_prompt = MagicMock()
@@ -128,6 +143,13 @@ class TestController(unittest.TestCase):
              patch("ui.controller.get_dynamic_session_info", return_value=session), \
              patch("ui.controller.get_api_key", return_value=None):
             self.assertNotIn("groq", self.ctl.status_line())
+
+    def test_local_provider_gets_compact_prompt(self):
+        with patch("ui.controller.load_profile", return_value={"active_provider": "ollama"}), \
+             patch("ui.controller.build_compact_system_prompt", return_value="SHORT") as compact, \
+             patch("ui.controller.build_system_prompt", return_value="LONG"):
+            self.assertEqual(self.ctl.system_prompt(), "SHORT")
+        compact.assert_called_once()
 
     def test_invalid_skill_level_rejected(self):
         with self.assertRaises(ValueError):

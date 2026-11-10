@@ -145,6 +145,7 @@ class MainWindow(Adw.ApplicationWindow):
 
     def _connect_orchestrator(self) -> None:
         o = self._orch
+        o.response_chunk.connect(on_main_thread(self._chat.stream))
         o.response_ready.connect(on_main_thread(self._on_response))
         o.state_changed.connect(on_main_thread(self._on_state))
         o.approval_requested.connect(on_main_thread(self._on_approval))
@@ -237,6 +238,8 @@ class MainWindow(Adw.ApplicationWindow):
 
     def _on_state(self, state: str) -> None:
         self._state = state
+        if state != "THINKING":
+            self._chat.end_stream()
         self._chat.set_typing(state == "THINKING")
         self._sync_composer()
         if state in ("IDLE", "ERROR") and self._pages.get_visible_child_name() == "chat":

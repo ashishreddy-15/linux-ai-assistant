@@ -309,14 +309,18 @@ class TestCreateLLMClientFactory(unittest.TestCase):
         self.assertEqual(client._model, "gemini-3.8-flash")
 
     def test_create_ollama_client(self):
+        from agent.local_llm import OllamaAgentClient
+
         client = create_llm_client("ollama", "", model_name="qwen2.5-coder:7b")
-        self.assertIsInstance(client, (GroqAgentClient, OpenAIAgentClient))
+        self.assertIsInstance(client, OllamaAgentClient)
         self.assertEqual(client._model, "qwen2.5-coder:7b")
-        self.assertIn("11434", str(client._client.base_url))
+        self.assertIn("11434", client._base_url)
 
     def test_create_ollama_client_default_model(self):
+        from agent.local_llm import OllamaAgentClient
+
         client = create_llm_client("ollama", "")
-        self.assertIsInstance(client, (GroqAgentClient, OpenAIAgentClient))
+        self.assertIsInstance(client, OllamaAgentClient)
         self.assertEqual(client._model, OLLAMA_DEFAULT_MODEL)
 
     def test_create_openrouter_client(self):
@@ -455,7 +459,7 @@ class TestFetchAvailableModels(unittest.TestCase):
             mock_client.models.list.return_value = MagicMock(data=[])
 
             models = fetch_available_models("ollama", "")
-            self.assertEqual(models, ["qwen2.5-coder:7b", "llama3.2:3b", "mistral:7b"])
+            self.assertEqual(models, ["qwen3.5:4b", "llama3.2:3b", "mistral:7b"])
 
     def test_fetch_ollama_models_failure_falls_back(self):
         with patch("openai.OpenAI") as mock_openai_cls:
@@ -464,7 +468,7 @@ class TestFetchAvailableModels(unittest.TestCase):
             mock_client.models.list.side_effect = ConnectionError("Connection refused")
 
             models = fetch_available_models("ollama", "")
-            self.assertEqual(models, ["qwen2.5-coder:7b", "llama3.2:3b", "mistral:7b"])
+            self.assertEqual(models, ["qwen3.5:4b", "llama3.2:3b", "mistral:7b"])
 
 
 class TestOpenAIAgentClientToolCallHandling(unittest.TestCase):

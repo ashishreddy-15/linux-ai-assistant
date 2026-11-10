@@ -135,6 +135,47 @@ Dependencies include:
 
 ---
 
+## Local AI (recommended)
+
+The assistant is built to run on a **local model through [Ollama](https://ollama.com)**: free, private (nothing leaves your computer) and offline. Cloud providers remain available in Preferences.
+
+### Install Ollama without sudo
+
+```bash
+# Download the official release, check it against the release's sha256sum.txt, then:
+mkdir -p ~/.local/opt/ollama ~/.local/bin
+tar --zstd -xf ollama-linux-amd64.tar.zst -C ~/.local/opt/ollama \
+    --exclude='lib/ollama/cuda_v12*' --exclude='lib/ollama/cuda_v13*'   # skip CUDA if you have no NVIDIA GPU
+ln -sfn ~/.local/opt/ollama/bin/ollama ~/.local/bin/ollama
+
+# Start it. OLLAMA_IGPU_ENABLE=1 lets it use an integrated Intel/AMD GPU via Vulkan.
+OLLAMA_IGPU_ENABLE=1 ollama serve &
+ollama pull qwen3.5:4b
+```
+
+Then choose **Private, on this computer** during setup (or in Preferences → AI).
+
+### Model choice
+
+The default is **`qwen3.5:4b`** (3.3 GB): it uses tools reliably with thinking turned off. Avoid models that can't switch thinking off (for example the plain `qwen3:4b` tag, which writes its reasoning into every reply); the app checks that a model really calls tools before using it.
+
+### What makes small models work here
+
+- The native Ollama API is used so the context window can be raised to 8k tokens (Ollama's default silently cuts long conversations).
+- A compact system prompt (~400 tokens) and trimmed tool schemas; old turns are dropped without separating a tool call from its result.
+- Replies stream into the chat; tool calls that a model writes as text are recovered; a "question" proposed as an `echo` command is shown as a normal question.
+- 8 CPU threads instead of Ollama's default (which can be 2 on hybrid laptop chips).
+
+### Measured speed (Core Ultra 5 125U, 16 GB, `qwen3.5:4b`)
+
+| | Reading the prompt | Writing |
+|---|---|---|
+| CPU, Ollama default (2 threads) | — | ~4 tok/s |
+| CPU, 8 threads | 36 tok/s | 10 tok/s |
+| Integrated GPU (Vulkan) | 107 tok/s | 6.6 tok/s |
+
+On the GPU a typical step takes **~25–30 s** for the first message of a conversation; follow-ups are faster because Ollama reuses what it already read (9 s → 2.4 s of prompt reading in a measured second turn).
+
 ## Usage
 
 Launch the assistant:

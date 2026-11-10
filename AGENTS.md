@@ -7,7 +7,8 @@ A lightweight native Linux desktop GUI assistant built with Python and GTK4 / li
 - Language: Python 3.11+ (Managed with `uv` or standard venv)
 - Package & Environment Manager: `uv` (recommended) or `pip`
 - GUI Framework: GTK4 + libadwaita via system PyGObject (no embedded browser). Styling lives in `ui/style.css`; light/dark follows the system via `Adw.StyleManager`.
-- LLM Providers: Groq (via `openai` SDK, targeting `llama-3.3-70b-versatile`, `qwen-2.5-coder-32b`) and Google GenAI SDK (`google-genai`), targeting `gemini-3.8-flash`.
+- LLM Providers: **Local first** — Ollama via its native `/api/chat` (`agent/local_llm.py`, default model `qwen3.5:4b`, 8k context, streaming, compact prompt). Cloud providers are optional: Groq and other OpenAI-compatible APIs (`openai` SDK) and Google GenAI (`google-genai`).
+- Local-model rules: keep the compact prompt stable between turns (Ollama reuses its cache), never split a tool call from its result when trimming history, and verify a model really emits tool calls (`probe_tool_calling`) before relying on it.
 - Secret Storage: Linux keyring via the Python `keyring` library.
 - Threading & Concurrency: All LLM networking and subprocess executions run on background daemon threads communicating via thread-safe signal/callback dispatch. Never block the UI loop.
 
@@ -22,6 +23,7 @@ linux-ai-helper/
 ├── agent/
 │   ├── events.py            # Pure-Python Signal/Slot event dispatcher
 │   ├── llm_client.py        # Multi-provider LLM client wrappers
+│   ├── local_llm.py         # Ollama native client: context size, streaming, text tool-call recovery
 │   ├── prompts.py           # Dynamic system prompts (Beginner, Intermediate, Advanced)
 │   ├── tools.py             # Declarations for shell proposals & desktop file creation
 │   └── orchestrator.py      # HITL state machine pausing on mutating actions

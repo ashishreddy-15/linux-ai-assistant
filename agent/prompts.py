@@ -225,3 +225,48 @@ You have access to four tools:
     ])
 
     return prompt
+
+
+# ---------------------------------------------------------------------------
+# Compact prompt for small local models
+# ---------------------------------------------------------------------------
+
+_COMPACT_STYLE = {
+    "Beginner": "The user is new to Linux. Use plain, friendly words, no jargon. Do not paste commands in your reply; the app shows them.",
+    "Intermediate": "The user knows the basics. Explain briefly why you chose a command.",
+    "Advanced": "The user is an expert. Be terse and technical.",
+}
+
+
+def build_compact_system_prompt(
+    system_profile: Dict[str, Any],
+    dynamic_session: Dict[str, Any],
+    skill_level: str,
+) -> str:
+    """A short system prompt (~400 tokens) for small local models.
+
+    Small models follow a few direct rules far better than long guidance, and
+    every token here is re-read on a slow CPU, so this keeps only what changes
+    behaviour. Keep it stable between turns so the runtime can reuse its cache.
+    """
+    if skill_level not in VALID_SKILL_LEVELS:
+        skill_level = "Intermediate"
+    pm = system_profile.get("primary_package_manager") or "unknown"
+    helpers = ", ".join(system_profile.get("secondary_helpers") or []) or "none"
+    os_pretty = system_profile.get("os_pretty_name") or system_profile.get("os_name") or "Linux"
+    desktop = dynamic_session.get("xdg_current_desktop", "unknown")
+    return f"""You are a Linux assistant inside a desktop app. You help with installing apps, fixing problems and system settings.
+
+System: {os_pretty}, package manager `{pm}` (also: {helpers}), desktop {desktop}, {system_profile.get("cpu_architecture", "x86_64")}.
+
+Rules:
+1. To change anything (install, remove, edit files, restart services) call `propose_shell_command`. Never claim you ran something; the user approves every command in the app.
+2. Propose ONE command per call. Fill `title` (short outcome, e.g. "Install VLC media player") and `effects` (2-3 short plain-language bullets).
+3. Desktop apps (VLC, Spotify, Postman, Steam…): use Flatpak first, e.g. `flatpak install --user -y flathub org.videolan.VLC`. It needs no password. If Flathub is missing, first run `flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo`. Use `{pm}` only for system tools, drivers and updates; those need root, so start the command with sudo and set requires_root true.
+4. Networking: use `nmcli` and `ip`, never `iwconfig` or `ifconfig`. Disk space: `du` and `df`. Logs: `journalctl`.
+5. Use `read_file_snippet` to look at a config file before changing it, and `inspect_manual` only for unfamiliar commands.
+6. Never propose wiping disks or deleting system files unless the user clearly insists.
+7. If a command fails, read its output, say what went wrong in one sentence, and propose a fix.
+8. If you are not sure what the user wants, ask one short question in your reply text. Never use a command (like echo) to ask a question.
+
+Style: {_COMPACT_STYLE[skill_level]} Keep replies short."""

@@ -16,9 +16,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from agent.llm_client import create_llm_client
 from agent.orchestrator import AgentOrchestrator
-from agent.prompts import build_system_prompt
+from agent.prompts import build_compact_system_prompt, build_system_prompt
 from config.keyring_manager import (
-    check_ollama_status,
     fetch_available_models,
     get_api_key,
     save_api_key,
@@ -26,7 +25,6 @@ from config.keyring_manager import (
     validate_key_format,
 )
 from config.profile_manager import (
-    DEFAULT_OLLAMA_MODEL,
     DEFAULT_SKILL_LEVEL,
     DEFAULT_THEME,
     PROVIDER_CONFIGS,
@@ -67,9 +65,18 @@ def provider_display_name(provider: str) -> str:
     return str(cfg.get("display_name", provider)).split(" (")[0]
 
 
+# Local models known to call tools reliably with thinking turned off, best
+# first. Measured on a 16 GB Core Ultra 5 laptop; see README "Local AI".
+RECOMMENDED_LOCAL_MODELS = ("qwen3.5:4b", "qwen3:4b-instruct", "qwen2.5:7b", "llama3.2:3b")
+
+
 def provider_models(provider: str) -> List[str]:
     if provider == "ollama":
-        return [DEFAULT_OLLAMA_MODEL, "llama3.2:3b", "mistral:7b"]
+        from agent.local_llm import installed_models
+
+        installed = installed_models()
+        ranked = [m for m in RECOMMENDED_LOCAL_MODELS if m in installed]
+        return ranked + [m for m in installed if m not in ranked] or list(RECOMMENDED_LOCAL_MODELS)
     return list(PROVIDER_CONFIGS.get(provider, {}).get("fallback_models", []))
 
 
@@ -167,6 +174,13 @@ class AppController:
             parts.append(provider_display_name(self.active_provider()).split()[0].lower())
         return " · ".join(parts)
 
+    def system_prompt(self, profile: Optional[Dict[str, Any]] = None, level: Optional[str] = None) -> str:
+        """Full prompt for cloud models; a compact one for small local models."""
+        profile = profile or self.profile()
+        level = level or self.skill_level()
+        build = build_compact_system_prompt if self.active_provider() == "ollama" else build_system_prompt
+        return build(profile, get_dynamic_session_info(), level)
+
     # ------------------------------------------------------------------
     # Writing state
     # ------------------------------------------------------------------
@@ -182,7 +196,7 @@ class AppController:
         profile = self.profile()
         provider = self.active_provider()
         api_key = get_api_key(provider) or ("ollama" if provider == "ollama" else "")
-        prompt = build_system_prompt(profile, get_dynamic_session_info(), self.skill_level())
+        prompt = self.system_prompt(profile)
         client = create_llm_client(
             provider=provider,
             api_key=api_key or "unconfigured",
@@ -195,8 +209,7 @@ class AppController:
         if level not in VALID_SKILL_LEVELS:
             raise ValueError(f"Unknown skill level: {level}")
         profile = self._update_profile(skill_level=level)
-        prompt = build_system_prompt(profile, get_dynamic_session_info(), level)
-        self.orchestrator.update_system_prompt(prompt)
+        self.orchestrator.update_system_prompt(self.system_prompt(profile, level))
 
     def set_theme(self, theme: str) -> None:
         if theme not in VALID_THEMES:
@@ -224,18 +237,38 @@ class AppController:
         if current.get("onboarding_complete"):
             refreshed["onboarding_complete"] = True
             save_profile(refreshed)
-        prompt = build_system_prompt(refreshed, get_dynamic_session_info(), self.skill_level())
-        self.orchestrator.update_system_prompt(prompt)
+        self.orchestrator.update_system_prompt(self.system_prompt(refreshed))
 
     # ------------------------------------------------------------------
     # Network checks (call from a worker thread – these block)
     # ------------------------------------------------------------------
 
+    def check_local_model(self, model: Optional[str] = None) -> Tuple[bool, str, List[str]]:
+        """Is Ollama running, is a model downloaded, and can it use tools?"""
+        from agent.local_llm import (
+            OllamaAgentClient,
+            installed_models,
+            model_supports_tools,
+            probe_tool_calling,
+            server_version,
+        )
+
+        if server_version() is None:
+            return False, "Ollama isn't running.", []
+        models = provider_models("ollama")
+        installed = installed_models()
+        if not installed:
+            return False, f"Ollama is running but has no models. Download one with: ollama pull {RECOMMENDED_LOCAL_MODELS[0]}", []
+        model = model or models[0]
+        if model_supports_tools(model) is False:
+            return False, f"“{model}” can't use tools, so it can't run commands. Pick another model.", models
+        ok, message = probe_tool_calling(OllamaAgentClient(system_prompt="", model=model))
+        return ok, (f"{model} is ready" if ok else message), models
+
     def test_key(self, provider: str, api_key: str) -> Tuple[bool, str, List[str]]:
         """Return (ok, message, models)."""
         if provider == "ollama":
-            ok, message = check_ollama_status()
-            return ok, message, fetch_available_models("ollama") if ok else []
+            return self.check_local_model()
         if not validate_key_format(provider, api_key):
             cfg = PROVIDER_CONFIGS.get(provider, {})
             prefix = cfg.get("key_prefix")
