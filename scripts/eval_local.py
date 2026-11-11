@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from google.genai import types  # noqa: E402
 
+from agent import installer  # noqa: E402
 from agent.local_llm import OllamaAgentClient  # noqa: E402
 from agent.package_search import execute_search_packages  # noqa: E402
 from agent.prompts import build_compact_system_prompt  # noqa: E402
@@ -76,8 +77,32 @@ TASKS = [
     ("wifi check", [user("is my wifi working? check it")], "change", has(r"\bnmcli\b", r"\bip\b", r"\bping\b"), False),
     ("chit-chat", [user("hi! what can you help me with?")], "text", None, False),
     ("vague", [user("fix it")], "text", None, False),
+    ("file: proton rpm", [user("I downloaded the Proton VPN rpm, install it")], "change", has(r"^/.*protonvpn"), False),
+    ("file: antigravity", [user("I downloaded the Antigravity tarball. Install it and add it to my app menu.")], "change", has(r"^/.*Antigravity"), False),
+    ("file: cursor theme", [user("install the GoogleDot cursor theme I downloaded")], "change", has(r"^/.*GoogleDot"), False),
     ("recover: no flathub", flathub_failure(), "change", has("remote-add"), False),
 ]
+
+
+def make_fixtures() -> None:
+    """Fake downloads so file-install tasks run without touching the real Downloads folder."""
+    import io
+    import tarfile
+    import tempfile
+
+    d = Path(tempfile.mkdtemp(prefix="eval-downloads-"))
+    installer.DOWNLOAD_DIRS = (d,)
+    (d / "protonvpn-stable-release-1.0.3-1.noarch.rpm").write_bytes(b"\xed\xab\xee\xdb" + b"\0" * 64)
+
+    def pack(name: str, members: dict) -> None:
+        with tarfile.open(d / name, "w:gz") as tf:
+            for n, mode in members.items():
+                info = tarfile.TarInfo(n)
+                info.size, info.mode = 1, mode
+                tf.addfile(info, io.BytesIO(b"x"))
+
+    pack("Antigravity-linux-x64.tar.gz", {"Antigravity/antigravity": 0o755, "Antigravity/resources/icon.png": 0o644})
+    pack("GoogleDot-Black.tar.gz", {"GoogleDot-Black/index.theme": 0o644, "GoogleDot-Black/cursors/left_ptr": 0o644})
 
 
 def run_readonly(fc: types.FunctionCall) -> str:
@@ -86,6 +111,8 @@ def run_readonly(fc: types.FunctionCall) -> str:
         return execute_search_packages(str(args.get("query", "")))
     if fc.name == "inspect_manual":
         return execute_inspect_manual(str(args.get("command_or_topic", "")))
+    if fc.name == "inspect_download":
+        return installer.execute_inspect_download(str(args.get("name", "")))
     if fc.name == "read_file_snippet":
         return execute_read_file_snippet(str(args.get("file_path", "")), int(args.get("max_lines", 100)))
     return f"ERROR: unknown tool {fc.name}"
@@ -105,7 +132,7 @@ def run_task(client: OllamaAgentClient, history: List[types.Content]) -> dict:
         changes = [c for c in calls if c.name not in READONLY_TOOLS]
         if changes:
             c = changes[0]
-            return {"kind": "change", "tool": c.name, "command": str((c.args or {}).get("command", "")),
+            return {"kind": "change", "tool": c.name, "command": str((c.args or {}).get("command") or (c.args or {}).get("path", "")),
                     "title": (c.args or {}).get("title", ""), "used": used, "secs": time.monotonic() - start}
         if not calls:
             return {"kind": "text", "text": text, "used": used, "secs": time.monotonic() - start}
@@ -119,6 +146,7 @@ def run_task(client: OllamaAgentClient, history: List[types.Content]) -> dict:
 
 
 def evaluate(model: str) -> None:
+    make_fixtures()
     prompt = build_compact_system_prompt(get_or_create_profile(), get_dynamic_session_info(), "Beginner")
     client = OllamaAgentClient(system_prompt=prompt, model=model)
     print(f"=== {model}", flush=True)

@@ -180,6 +180,10 @@ The default is **`qwen3.5:4b`** (3.3 GB): it uses tools reliably with thinking t
 
 Small models invent IDs (for example `org.postman.Postman` instead of Flathub's real `com.getpostman.Postman`). Before proposing an install the model calls the read-only **`search_packages`** tool, which looks up exact Flatpak IDs through Flathub's public search API and exact package names through `dnf`, `apt`, `pacman` or `zypper`. It also notices when Flathub isn't set up yet and gives the model the command to add it. The search term is sent to flathub.org (as `flatpak search` would do); nothing else leaves the computer.
 
+### Installing from a downloaded file
+
+Some apps aren't in any store: an RPM from the vendor, a `.tar.gz` that needs unpacking and a menu entry, an AppImage, a cursor or icon theme. Say "install the Proton VPN rpm I downloaded", or use **Install a downloaded file…** on the home screen. The assistant inspects the file without running it (RPM signature and repository check, archive layout, safe paths, the real executable and icon), then shows one approval card with every step. Apps unpack into `~/.local/opt` and need no password; RPM/DEB installs use your package manager and ask for it. Installs are recorded, so "remove Antigravity" can undo them. The model only picks the tool; the commands come from code (`agent/installer.py`).
+
 Read-only lookups run without approval, so the chat shows each one as a quiet line (`↳ searched packages for “postman”`, `↳ read ~/.bashrc`).
 
 ### Evaluating models

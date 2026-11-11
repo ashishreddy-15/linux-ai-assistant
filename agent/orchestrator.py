@@ -46,12 +46,14 @@ import logging
 import threading
 from collections import deque
 from enum import Enum
+from pathlib import Path
 from typing import Any, Deque, Dict, List, Optional
 
 from google.genai import types
 
 from agent.events import Signal, Slot
 from agent.llm_client import BaseLLMClient, GeminiAgentClient
+from agent import installer
 from agent.package_search import execute_search_packages
 from agent.tools import (
     MUTATING_TOOLS,
@@ -115,6 +117,7 @@ class AgentOrchestrator:
 
         # Pending tool call kept while AWAITING_APPROVAL
         self._pending_tool_call: Optional[types.FunctionCall] = None
+        self._pending_plan: Optional[tuple] = None
         self._executing_tool_call: Optional[types.FunctionCall] = None
 
         # A model turn may contain several tool calls. They are handled one at
@@ -299,6 +302,9 @@ class AgentOrchestrator:
             topic = args.get("command_or_topic", "")
             self.tool_activity.emit(f"looked up the manual for {topic}")
             result = execute_inspect_manual(topic)
+        elif fc.name == "inspect_download":
+            self.tool_activity.emit(f"looked at the download “{args.get('name', '')}”")
+            result = installer.execute_inspect_download(args.get("name", ""))
         elif fc.name == "search_packages":
             query = args.get("query", "")
             self.tool_activity.emit(f"searched packages for “{query}”")
@@ -308,10 +314,33 @@ class AgentOrchestrator:
 
         self._add_result(fc, result)
 
+    def _plan_for(self, fc: types.FunctionCall, args: Dict[str, Any]) -> Optional["installer.Plan"]:
+        """Build an install/removal plan, or answer the model with why not."""
+        try:
+            if fc.name == "install_from_file":
+                plan = installer.build_plan(installer.find_download(args.get("path", "")))
+            else:
+                plan = installer.build_removal(args.get("name", ""))
+        except (installer.InstallError, OSError) as exc:
+            self._add_result(fc, f"ERROR: {exc}")
+            self._process_next()
+            return None
+        return plan
+
     def _handle_mutating_tool(self, fc: types.FunctionCall) -> None:
         """Pause execution and emit approval_requested for the UI."""
         args: Dict[str, Any] = normalize_tool_args(fc.name, fc.args)
         tool_name = fc.name
+        plan: Optional["installer.Plan"] = None
+        original_args = args
+
+        if tool_name in ("install_from_file", "uninstall_app"):
+            plan = self._plan_for(fc, args)
+            if plan is None:
+                return  # the failure was reported to the model; carry on
+            args = {"command": plan.script, "explanation": " ".join(plan.notes), "requires_root": plan.requires_root,
+                    "title": plan.title, "effects": plan.effects}
+            tool_name = "propose_shell_command"
 
         if tool_name == "propose_shell_command":
             command = args.get("command", "")
@@ -359,7 +388,9 @@ class AgentOrchestrator:
         else:
             payload = {"tool_name": tool_name, "raw_args": args}
 
-        normalized_fc = types.FunctionCall(name=fc.name, args=args, id=fc.id)
+        # Keep the model's own tool name and arguments so its history stays consistent.
+        normalized_fc = types.FunctionCall(name=fc.name, args=original_args if plan else args, id=fc.id)
+        self._pending_plan = (normalized_fc, plan) if plan else None
         self._pending_tool_call = normalized_fc
         self._set_state(OrchestratorState.AWAITING_APPROVAL)
         self.approval_requested.emit(payload)
@@ -367,6 +398,32 @@ class AgentOrchestrator:
     # ------------------------------------------------------------------
     # Internal: command execution
     # ------------------------------------------------------------------
+
+    def _record_plan(self, exit_code: int, tool_call: types.FunctionCall) -> None:
+        """Remember what a successful install changed, so it can be removed later."""
+        pending, self._pending_plan = self._pending_plan, None
+        if pending is None or pending[0] is not tool_call or exit_code != 0:
+            return
+        record = pending[1].record
+        try:
+            if "forget" in record:
+                installer.forget_record(record["forget"])
+            else:
+                installer.save_record(record)
+        except OSError:
+            logger.warning("Could not save the install record", exc_info=True)
+
+    def install_file(self, path: str) -> None:
+        """Start an install for a file the user picked, without asking the model."""
+        if self._state not in (OrchestratorState.IDLE, OrchestratorState.ERROR):
+            return
+        name = Path(path).name
+        self._history.append(GeminiAgentClient.make_user_turn(f"Install the downloaded file {name}"))
+        fc = types.FunctionCall(name="install_from_file", args={"path": path}, id="call_file")
+        self._history.append(types.Content(role="model", parts=[types.Part(function_call=fc)]))
+        self._batch = deque([fc])
+        self._batch_results = []
+        self._process_next()
 
     def _execute_command(self, command: str, tool_call: types.FunctionCall) -> None:
         """Run an approved shell command via CommandRunner on a worker thread."""
@@ -434,6 +491,7 @@ class AgentOrchestrator:
         tool_call: types.FunctionCall,
     ) -> None:
         """Feed execution results back into the LLM conversation."""
+        self._record_plan(exit_code, tool_call)
         self.command_finished.emit(exit_code, tail_log)
         self._cmd_runner = None
         self._cmd_thread = None

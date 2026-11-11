@@ -19,7 +19,7 @@ linux-ai-helper/
 ├── main.py
 ├── scripts/
 │   ├── install-ollama-user.sh  # No-sudo Ollama install used by in-app setup
-│   └── eval_local.py           # 12-task evaluation of local models
+│   └── eval_local.py           # 15-task evaluation of local models
 ├── config/
 │   ├── profile_manager.py   # Stores/reads ~/.config/linux-helper/system_profile.json
 │   └── keyring_manager.py   # Secure API key handling via system keyring
@@ -28,6 +28,7 @@ linux-ai-helper/
 │   ├── llm_client.py        # Multi-provider LLM client wrappers
 │   ├── local_llm.py         # Ollama native client: context size, streaming, text tool-call recovery
 │   ├── local_setup.py       # Detect Ollama/models/GPU; install, start and pull steps as approval cards
+│   ├── installer.py         # Install from downloaded files (rpm/deb/tar/zip/AppImage): inspect, plan, records, removal
 │   ├── package_search.py    # search_packages tool: Flathub API + dnf/apt/pacman/zypper (read-only)
 │   ├── prompts.py           # Dynamic system prompts (Beginner, Intermediate, Advanced)
 │   ├── tools.py             # Declarations for shell proposals & desktop file creation
@@ -58,4 +59,5 @@ linux-ai-helper/
 4. FreeDesktop Path Resolution: `.desktop` launcher files must contain absolute paths without unresolved tildes (`~`).
 5. UI Thread Safety: Orchestrator signals fire on worker threads; UI code must only touch widgets via `GLib.idle_add` (see `on_main_thread` in `ui/window.py`).
 6. No Markup Injection: Never pass model or command output to `set_markup` unescaped. Use `label()`/`set_text`, or `ui.markup.markdown_to_blocks`, which escapes first.
+8. Special installs: the model never writes extract/link/.desktop commands. `agent/installer.py` inspects files without running them, builds one script per approval card, and records installs in `~/.local/share/linux-assistant/installs.json` so `uninstall_app` can reverse them. Archive member names are untrusted: quote everything, refuse escaping paths.
 7. Theme Colours: Never hard-code UI colours in `ui/style.css` or widgets. Use libadwaita variables (`--accent-color`, `--card-bg-color`, `--warning-color`, …) or `color-mix()` of them, so the app follows each user's light/dark setting, accent colour and custom theme.

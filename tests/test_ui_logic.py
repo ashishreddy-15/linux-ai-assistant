@@ -92,7 +92,9 @@ class TestController(unittest.TestCase):
         with patch("ui.controller.load_profile", return_value={"active_provider": "groq", "onboarding_complete": True}), \
              patch("ui.controller.get_api_key", return_value=None):
             self.assertFalse(self.ctl.needs_onboarding())
-        with patch("ui.controller.load_profile", return_value={"active_provider": "ollama"}):
+        with patch("ui.controller.load_profile", return_value={"active_provider": "ollama"}), \
+             patch("agent.local_llm.server_version", return_value="0.40"), \
+             patch("agent.local_llm.installed_models", return_value=["qwen3.5:4b"]):
             self.assertFalse(self.ctl.needs_onboarding())
 
     def test_test_key_rejects_bad_format_without_network(self):
