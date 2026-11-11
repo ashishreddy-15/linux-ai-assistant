@@ -75,6 +75,14 @@ def slugify(text: str) -> str:
     return slug or "app"
 
 
+_PLATFORM_TAIL = re.compile(r"([._-](linux|x64|x86[_-]64|amd64|64bit|64|generic))+$", re.I)
+
+
+def app_name(raw: str) -> str:
+    """A short slug without platform suffixes: 'Antigravity-x64' -> 'antigravity'."""
+    return slugify(_PLATFORM_TAIL.sub("", raw) or raw)
+
+
 def _stem(path: Path) -> str:
     name = path.name
     for suffix in ARCHIVE_SUFFIXES + (".AppImage", ".appimage", ".rpm", ".deb", ".run", ".sh"):
@@ -399,7 +407,7 @@ def build_plan(path: Path) -> Plan:
         if what in ("source", "unknown-archive"):
             raise InstallError(describe(info))
         is_zip = path.name.lower().endswith(".zip")
-        stem = slugify(top or _stem(path))
+        stem = app_name(top or _stem(path))
 
         if what in ("cursor-theme", "icon-theme", "gtk-theme", "fonts"):
             root = {"cursor-theme": ICONS, "icon-theme": ICONS, "gtk-theme": THEMES, "fonts": FONTS}[what]
@@ -436,7 +444,7 @@ def build_plan(path: Path) -> Plan:
         script = "\n".join([
             "set -e", _guard_free(dest), unpack,
             f"chmod +x {_quote(exe)}", f"mkdir -p {_quote(BIN)}", f"ln -sf {_quote(exe)} {_quote(link)}",
-            _desktop_script(stem, (top or stem).replace("-", " ").replace("_", " "), exe, icon, f"{stem} (installed by Linux Assistant)"),
+            _desktop_script(stem, stem.replace("-", " ").replace("_", " ").title(), exe, icon, f"{stem} (installed by Linux Assistant)"),
             f"echo 'Installed {stem}.'",
         ])
         notes = []
