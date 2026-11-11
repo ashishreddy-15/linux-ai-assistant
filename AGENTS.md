@@ -31,6 +31,7 @@ linux-ai-helper/
 │   ├── installer.py         # Install from downloaded files (rpm/deb/tar/zip/AppImage): inspect, plan, records, removal
 │   ├── builder.py           # Build source projects into ~/.local, install manifests, find_package_for
 │   ├── downloads.py         # Verified download sources (vendor pages, GitHub releases, user-pasted links)
+│   ├── model_manager.py     # Local model catalog, pull with progress/cancel, load/unload (Ollama HTTP API)
 │   ├── package_search.py    # search_packages tool: Flathub API + dnf/apt/pacman/zypper (read-only)
 │   ├── prompts.py           # Dynamic system prompts (Beginner, Intermediate, Advanced)
 │   ├── tools.py             # Declarations for shell proposals & desktop file creation
@@ -45,6 +46,7 @@ linux-ai-helper/
     ├── action_card.py       # HITL approval → running → result card
     ├── onboarding.py        # First-run setup
     ├── local_setup.py       # Local AI setup view/dialog (runs the setup cards)
+    ├── models.py            # Models window: download with progress, use, run/stop, remove
     ├── preferences.py       # Adw.PreferencesDialog
     ├── controller.py        # GTK-free settings/provider logic (unit-tested)
     ├── widgets.py           # Shared widgets (progress ring, terminal view, Markdown view)

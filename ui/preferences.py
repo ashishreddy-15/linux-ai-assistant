@@ -29,11 +29,13 @@ class PreferencesDialog(Adw.PreferencesDialog):
         controller: AppController,
         on_changed: Callable[[], None],
         on_local_setup: Optional[Callable[[], None]] = None,
+        on_models: Optional[Callable[[], None]] = None,
     ) -> None:
         super().__init__(title="Preferences", search_enabled=False)
         self._controller = controller
         self._on_changed = on_changed
         self._on_local_setup = on_local_setup
+        self._on_models = on_models
         self._loading = True
         self.add(self._general_page())
         self.add(self._ai_page())
@@ -96,6 +98,10 @@ class PreferencesDialog(Adw.PreferencesDialog):
         self._setup_local_btn.add_css_class("flat")
         self._setup_local_btn.connect("clicked", lambda *_: self._open_local_setup())
         self._status_row.add_suffix(self._setup_local_btn)
+        self._models_btn = Gtk.Button(label="Models…", valign=Gtk.Align.CENTER, visible=False)
+        self._models_btn.add_css_class("flat")
+        self._models_btn.connect("clicked", lambda *_: self._open_models())
+        self._status_row.add_suffix(self._models_btn)
         group.add(self._status_row)
         page.add(group)
         self._sync_provider_rows(active, self._controller.profile().get("model_name"))
@@ -147,6 +153,11 @@ class PreferencesDialog(Adw.PreferencesDialog):
             self.close()
             self._on_local_setup()
 
+    def _open_models(self) -> None:
+        if self._on_models is not None:
+            self.close()
+            self._on_models()
+
     def _set_skill(self, level: str) -> None:
         if not self._loading:
             self._controller.set_skill_level(level)
@@ -175,8 +186,9 @@ class PreferencesDialog(Adw.PreferencesDialog):
         self._key_row.set_text("")
         has_key = bool(get_api_key(provider))
         self._setup_local_btn.set_visible(is_local and self._on_local_setup is not None)
+        self._models_btn.set_visible(is_local and self._on_models is not None)
         if is_local:
-            self._status_row.set_subtitle("Runs on this computer. Use “Set up…” to install, start or download a model.")
+            self._status_row.set_subtitle("Runs on this computer. Use “Set up…” to install or start it, and “Models…” to download or choose a model.")
         else:
             self._status_row.set_subtitle("Key saved" if has_key else "No key yet — paste one above and press ✓")
 
