@@ -93,7 +93,7 @@ class MainWindow(Adw.ApplicationWindow):
         view.add_top_bar(self._header)
 
         self._pages = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE, vexpand=True)
-        self._home = HomePage(self._send, self._setup_ai)
+        self._home = HomePage(self._send, self._setup_ai, self._pick_file)
         chat_page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self._chat = ChatView(self._open_preferences)
         chat_page.append(self._chat)
@@ -238,6 +238,31 @@ class MainWindow(Adw.ApplicationWindow):
             self._title.set_text(text if len(text) <= 48 else text[:46] + "…")
         self._chat.add_user(text)
         self._orch.send_message(text)
+
+    def _pick_file(self) -> None:
+        if not self._can_send():
+            return
+        dialog = Gtk.FileDialog(title="Choose a downloaded file")
+        downloads = Gio.File.new_for_path(GLib.get_user_special_dir(GLib.UserDirectory.DIRECTORY_DOWNLOAD) or GLib.get_home_dir())
+        dialog.set_initial_folder(downloads)
+
+        def done(dlg: Gtk.FileDialog, result: Gio.AsyncResult) -> None:
+            try:
+                path = dlg.open_finish(result).get_path()
+            except GLib.Error:
+                return  # cancelled
+            if path:
+                self._install_file(path)
+
+        dialog.open(self, None, done)
+
+    def _install_file(self, path: str) -> None:
+        name = path.rsplit("/", 1)[-1]
+        self._pages.set_visible_child_name("chat")
+        self._header.add_css_class("divided")
+        self._title.set_text(f"Install {name}"[:48])
+        self._chat.add_user(f"Install {name}")
+        self._orch.install_file(path)
 
     def _can_send(self) -> bool:
         return self._state in ("IDLE", "ERROR")

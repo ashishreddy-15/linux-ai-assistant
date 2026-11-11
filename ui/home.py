@@ -17,6 +17,7 @@ from ui.widgets import clamp, glow_line, kbd, label, mono  # noqa: E402
 #   action "prefill" -> put text in the prompt for the user to finish
 SUGGESTIONS = (
     ("package-x-generic-symbolic", "Install an app", "prefill", "Install "),
+    ("document-open-symbolic", "Install a downloaded file…", "pick", ""),
     ("network-wireless-symbolic", "Fix Wi‑Fi, sound or Bluetooth", "prefill", "Help me fix "),
     ("drive-harddisk-symbolic", "Free up disk space", "send",
      "Show me what is using the most space in my home folder and suggest safe ways to free some up."),
@@ -28,9 +29,11 @@ SUGGESTIONS = (
 
 
 class HomePage(Gtk.Box):
-    def __init__(self, on_send: Callable[[str], None], on_setup_ai: Callable[[], None]) -> None:
+    def __init__(self, on_send: Callable[[str], None], on_setup_ai: Callable[[], None],
+                 on_pick_file: Callable[[], None]) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, vexpand=True)
         self._on_send = on_send
+        self._on_pick_file = on_pick_file
 
         scroller = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER, vexpand=True)
         col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=22)
@@ -145,6 +148,8 @@ class HomePage(Gtk.Box):
         action, text = row.action  # type: ignore[attr-defined]
         if action == "send":
             self._on_send(text)
+        elif action == "pick":
+            self._on_pick_file()
         else:
             self._entry.set_text(text)
             self._entry.grab_focus()

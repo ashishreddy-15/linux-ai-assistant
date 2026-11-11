@@ -207,6 +207,30 @@ _search_packages = types.FunctionDeclaration(
     ),
 )
 
+
+def _path_tool(name: str, description: str, prop: str, prop_desc: str) -> types.FunctionDeclaration:
+    return types.FunctionDeclaration(
+        name=name, description=description,
+        parameters=types.Schema(type=types.Type.OBJECT, properties={
+            prop: types.Schema(type=types.Type.STRING, description=prop_desc)}, required=[prop]),
+    )
+
+
+_inspect_download = _path_tool(
+    "inspect_download",
+    "Look at a downloaded file (RPM, DEB, tarball, zip, AppImage) without running it and say what it is "
+    "and how to install it. Read-only. Use when the user mentions a file or an app that must be installed from a download.",
+    "name", "File name or part of it (e.g. 'protonvpn', 'antigravity'), or a full path.")
+_install_from_file = _path_tool(
+    "install_from_file",
+    "Install a downloaded file. The app builds the exact steps and the user approves them. "
+    "Call inspect_download first and pass the path it gave.",
+    "path", "Full path of the file, as returned by inspect_download.")
+_uninstall_app = _path_tool(
+    "uninstall_app",
+    "Remove an app that was installed from a downloaded file by this assistant. The user approves the steps.",
+    "name", "App name.")
+
 # ---------------------------------------------------------------------------
 # Bundled tool list & metadata
 # ---------------------------------------------------------------------------
@@ -219,6 +243,9 @@ AGENT_TOOLS: types.Tool = types.Tool(
         _read_file_snippet,
         _inspect_manual,
         _search_packages,
+        _inspect_download,
+        _install_from_file,
+        _uninstall_app,
     ]
 )
 
@@ -229,6 +256,8 @@ ALL_TOOLS: types.Tool = AGENT_TOOLS
 MUTATING_TOOLS: frozenset[str] = frozenset({
     "propose_shell_command",
     "create_desktop_entry",
+    "install_from_file",
+    "uninstall_app",
 })
 
 #: Tool names that are safe to execute automatically without user approval.
@@ -236,6 +265,7 @@ READONLY_TOOLS: frozenset[str] = frozenset({
     "read_file_snippet",
     "inspect_manual",
     "search_packages",
+    "inspect_download",
 })
 
 #: Standard OpenAI-formatted tool schemas for Groq / OpenAI-compatible endpoints
@@ -426,6 +456,20 @@ OPENAI_TOOLS: List[Dict[str, Any]] = [
 ]
 
 
+def _openai_path_tool(decl: types.FunctionDeclaration, prop: str) -> Dict[str, Any]:
+    return {"type": "function", "function": {
+        "name": decl.name, "description": decl.description,
+        "parameters": {"type": "object", "properties": {prop: {
+            "type": "string", "description": decl.parameters.properties[prop].description}}, "required": [prop]}}}
+
+
+OPENAI_TOOLS.extend([
+    _openai_path_tool(_inspect_download, "name"),
+    _openai_path_tool(_install_from_file, "path"),
+    _openai_path_tool(_uninstall_app, "name"),
+])
+
+
 _PM_ROOT_RE = re.compile(
     r"^(?P<pm>dnf|dnf5|yum|apt|apt-get|zypper|pacman)\s+(?:-\S+\s+)*"
     r"(?P<sub>install|reinstall|remove|erase|purge|autoremove|upgrade|update|"
@@ -523,6 +567,11 @@ def normalize_tool_args(name: str, raw_args: Any) -> Dict[str, Any]:
             or args.get("app") or args.get("term") or args.get("search")
         )
         args = {"query": str(val or "").strip()}
+
+    elif name in ("inspect_download", "install_from_file", "uninstall_app"):
+        key = "path" if name == "install_from_file" else "name"
+        val = next((args.get(k) for k in (key, "file_path", "file", "path", "name", "app", "query") if args.get(k)), "")
+        args = {key: str(val or "").strip()}
 
     elif name == "create_desktop_entry":
         args.setdefault("app_name", str(args.get("name") or ""))

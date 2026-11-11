@@ -63,6 +63,9 @@ _SHORT_DESCRIPTIONS = {
     "read_file_snippet": "Read the first lines of a text file (read-only, no approval needed).",
     "inspect_manual": "Show the man page or --help for one command name (read-only).",
     "search_packages": "Find exact app IDs and package names (read-only). Use before every install.",
+    "inspect_download": "Check a downloaded file (rpm, tar.gz, zip, AppImage) by name (read-only).",
+    "install_from_file": "Install a downloaded file. The app builds the steps; the user approves.",
+    "uninstall_app": "Remove an app that was installed from a downloaded file.",
 }
 
 
