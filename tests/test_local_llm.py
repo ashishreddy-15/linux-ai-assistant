@@ -198,3 +198,43 @@ class TestFileToolRouting(unittest.TestCase):
             self.assertTrue(wants_file_tools([user(text)]), text)
         call = types.Content(role="model", parts=[types.Part(function_call=types.FunctionCall(name="inspect_download", args={}))])
         self.assertTrue(wants_file_tools([user("go on"), call]))
+
+
+class TestLenientToolCalls(unittest.TestCase):
+    def test_llama_style_call_with_quoted_list_is_recovered(self):
+        from agent.local_llm import parse_text_tool_calls
+
+        text = ('{"name": "propose_shell_command", "parameters": {"command": "flatpak install --user -y flathub org.videolan.VLC", '
+                '"title": "Install VLC media player", "effects": "["Install VLC media player", "No root required", '
+                '"No password needed"]"}}')
+        rest, calls = parse_text_tool_calls(text)
+        self.assertEqual(rest, "")
+        name, args = calls[0]
+        self.assertEqual(name, "propose_shell_command")
+        self.assertEqual(args["effects"], ["Install VLC media player", "No root required", "No password needed"])
+
+    def test_still_rejects_real_garbage(self):
+        from agent.local_llm import parse_text_tool_calls
+
+        for text in ('{"name": "propose_shell_command", "parameters": {oops', "plain words", '{"not": "a call"}'):
+            self.assertEqual(parse_text_tool_calls(text)[1], [], text)
+
+    def test_title_examples_are_generic_so_small_models_dont_copy_them(self):
+        from agent.prompts import build_compact_system_prompt
+
+        prompt = build_compact_system_prompt({"os_pretty_name": "Fedora"}, {}, "Beginner")
+        self.assertNotIn("Install VLC media player", prompt)
+        self.assertIn("plain text and call no tool", prompt)
+
+
+class TestEchoAsText(unittest.TestCase):
+    def test_unquoted_plain_echo_becomes_text_but_real_commands_do_not(self):
+        from agent.local_llm import echo_as_question
+
+        def check(cmd):
+            return echo_as_question("propose_shell_command", {"command": cmd})
+
+        self.assertEqual(check("echo Hello, how can I assist you today?"), "Hello, how can I assist you today?")
+        self.assertEqual(check('echo "Which app?"'), "Which app?")
+        for cmd in ("echo hi > /etc/motd", "echo $HOME", "echo a; rm -rf x", "echo `id`", "ls -la", "echo hi | sudo tee /x"):
+            self.assertIsNone(check(cmd), cmd)

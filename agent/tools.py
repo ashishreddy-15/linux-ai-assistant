@@ -66,7 +66,7 @@ _propose_shell_command = types.FunctionDeclaration(
                 type=types.Type.STRING,
                 description=(
                     "Short outcome-focused title shown on the approval card, "
-                    "e.g. 'Install VLC media player'. Max ~6 words, no command syntax."
+                    "e.g. 'Install <app name>'. Max ~6 words, no command syntax."
                 ),
             ),
             "effects": types.Schema(
@@ -74,7 +74,7 @@ _propose_shell_command = types.FunctionDeclaration(
                 items=types.Schema(type=types.Type.STRING),
                 description=(
                     "2-4 plain-language bullet points describing what will change "
-                    "on the user's computer, e.g. 'Adds VLC to your app menu'."
+                    "on the user's computer, e.g. 'Adds <app name> to your app menu'."
                 ),
             ),
         },
@@ -318,7 +318,7 @@ OPENAI_TOOLS: List[Dict[str, Any]] = [
                         "type": "string",
                         "description": (
                             "Short outcome-focused title shown on the approval card, "
-                            "e.g. 'Install VLC media player'. Max ~6 words, no command syntax."
+                            "e.g. 'Install <app name>'. Max ~6 words, no command syntax."
                         ),
                     },
                     "effects": {
@@ -326,7 +326,7 @@ OPENAI_TOOLS: List[Dict[str, Any]] = [
                         "items": {"type": "string"},
                         "description": (
                             "2-4 plain-language bullet points describing what will change "
-                            "on the user's computer, e.g. 'Adds VLC to your app menu'."
+                            "on the user's computer, e.g. 'Adds <app name> to your app menu'."
                         ),
                     },
                 },

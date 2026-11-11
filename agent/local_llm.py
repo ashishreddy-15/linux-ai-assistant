@@ -187,6 +187,20 @@ _TAGGED_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
 _FENCED_RE = re.compile(r"```(?:json|tool_call|tool_code)?\s*(\{.*?\})\s*```", re.DOTALL)
 
 
+_QUOTED_LIST_RE = re.compile(r':\s*"\s*(\[.*?\])\s*"(\s*[,}])', re.DOTALL)
+
+
+def _loads_lenient(text: str) -> Any:
+    """json.loads, plus a repair for a mistake small models make: a list wrapped in quotes.
+
+    e.g. ``"effects": "["Install X", "No root"]"`` becomes ``"effects": ["Install X", "No root"]``.
+    """
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return json.loads(_QUOTED_LIST_RE.sub(r": \1\2", text))
+
+
 def _as_call(obj: Any) -> Optional[Tuple[str, Dict[str, Any]]]:
     if not isinstance(obj, dict):
         return None
@@ -211,7 +225,7 @@ def parse_text_tool_calls(content: str) -> Tuple[str, List[Tuple[str, Dict[str, 
     for pattern in (_TAGGED_RE, _FENCED_RE):
         for match in pattern.finditer(content):
             try:
-                call = _as_call(json.loads(match.group(1)))
+                call = _as_call(_loads_lenient(match.group(1)))
             except json.JSONDecodeError:
                 call = None
             if call:
@@ -222,7 +236,7 @@ def parse_text_tool_calls(content: str) -> Tuple[str, List[Tuple[str, Dict[str, 
     stripped = content.strip()
     if stripped.startswith("{") and stripped.endswith("}"):
         try:
-            call = _as_call(json.loads(stripped))
+            call = _as_call(_loads_lenient(stripped))
         except json.JSONDecodeError:
             call = None
         if call:
@@ -241,10 +255,13 @@ def echo_as_question(name: str, args: Dict[str, Any]) -> Optional[str]:
     """
     if name != "propose_shell_command":
         return None
-    match = _ECHO_RE.match(str(args.get("command") or ""))
-    if not match or any(op in match.group(2) for op in ("$(", "`")):
-        return None
-    return match.group(2).strip()
+    command = str(args.get("command") or "")
+    match = _ECHO_RE.match(command)
+    if match and not any(op in match.group(2) for op in ("$(", "`")):
+        return match.group(2).strip()
+    # Unquoted: `echo Hello, how can I help?` (only when it is plain words, with no shell syntax)
+    plain = re.fullmatch(r"\s*echo\s+([^;&|<>$`\\\n]+?)\s*", command)
+    return plain.group(1).strip() if plain else None
 
 
 def _might_be_tool_text(text: str) -> bool:

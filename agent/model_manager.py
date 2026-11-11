@@ -35,7 +35,7 @@ CATALOG = (
     CatalogModel("phi4-mini", "Phi-4 mini", 2.5, "Small model from Microsoft with tool support.", False),
     CatalogModel("gemma4:e4b", "Gemma 4 · E4B", 6.6, "Google's small model for agent tasks.", False),
     CatalogModel("granite4.1:8b", "Granite 4.1 · 8B", 5.3, "IBM's model, built for tool use.", False),
-    CatalogModel("llama3.2:3b", "Llama 3.2 · 3B", 2.0, "Light and fast, older than the others.", False),
+    CatalogModel("llama3.2:3b", "Llama 3.2 · 3B", 2.0, "Fast, but unreliable with tools: it may suggest unrelated commands. Not recommended.", False),
 )
 
 
