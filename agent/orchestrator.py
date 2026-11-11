@@ -338,7 +338,7 @@ class AgentOrchestrator:
             plan = self._plan_for(fc, args)
             if plan is None:
                 return  # the failure was reported to the model; carry on
-            args = {"command": plan.script, "explanation": " ".join(plan.notes), "requires_root": plan.requires_root,
+            args = {"command": plan.script, "explanation": "\n\n".join(plan.notes), "requires_root": plan.requires_root,
                     "title": plan.title, "effects": plan.effects}
             tool_name = "propose_shell_command"
 

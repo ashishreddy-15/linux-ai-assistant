@@ -228,15 +228,30 @@ def classify_archive(members: List[Member]) -> Dict[str, Any]:
     if fonts and len(fonts) >= len([m for m in members if not m.is_dir]) // 2:
         return {"kind": "fonts", "top": top}
 
-    candidates = [
-        (r, m) for r, m in rels.items()
-        if not m.is_dir and m.executable and not r.endswith((".so", ".sh", ".py")) and ".so." not in r
-        and not re.search(r"(^|/)(chrome-sandbox|chrome_crashpad_handler|crashpad_handler|xdg-\w+)$", r)
-    ]
     stem = slugify(top or "")
+    squash = lambda t: re.sub(r"[^a-z0-9]", "", t.lower())  # noqa: E731
+
+    # A vendor installer at the top level (install.sh, setup.run …) is meant to be run.
+    for r, m in sorted(rels.items(), key=lambda rm: rm[0]):
+        if "/" not in r and not m.is_dir and re.fullmatch(r"((install|setup|installer)(\.sh|\.run|\.py)?|[\w.-]+\.run)", r, re.I) \
+                and (m.executable or r.lower().endswith((".sh", ".run"))):
+            return {"kind": "installer-script", "top": top, "script": r}
+
+    def is_aux(r: str) -> bool:
+        return bool(re.search(r"(^|/)(chrome-sandbox|chrome_crashpad_handler|crashpad_handler|xdg-\w+|uninstall\w*)$", r, re.I))
+
+    plain = [(r, m) for r, m in rels.items() if not m.is_dir and m.executable and not is_aux(r)
+             and not r.endswith((".so", ".sh", ".py")) and ".so." not in r]
+    # Launcher scripts (Java apps, wrappers) count only when no real program is present.
+    scripts = [(r, m) for r, m in rels.items() if not m.is_dir and r.lower().endswith((".sh", ".py"))
+               and (m.executable or "/" not in r or r.startswith("bin/"))
+               and not re.search(r"(install|uninstall|setup|configure|build|update)", Path(r).name, re.I)]
+    # Some archives lose permission bits: fall back to extension-less files that look like the app.
+    named = [(r, m) for r, m in rels.items() if not m.is_dir and "." not in Path(r).name
+             and (r.startswith("bin/") or (squash(Path(r).name) and squash(Path(r).name) in squash(stem) + squash(top or "")))]
+    candidates = plain or scripts or named
     candidates.sort(key=lambda rm: (
-        0 if re.sub(r"[^a-z0-9]", "", Path(rm[0]).name.lower()) in re.sub(r"[^a-z0-9]", "", stem) or
-        re.sub(r"[^a-z0-9]", "", stem) in re.sub(r"[^a-z0-9]", "", Path(rm[0]).name.lower()) else 1,
+        0 if squash(Path(rm[0]).name) in squash(stem) or squash(stem) in squash(Path(rm[0]).name) else 1,
         rm[0].count("/"), -rm[1].size,
     ))
     if candidates:
@@ -247,8 +262,45 @@ def classify_archive(members: List[Member]) -> Dict[str, Any]:
             0 if re.search(r"(icon|logo|" + re.escape(stem) + ")", r.lower()) else 1,
             r.count("/"),
         ))
-        return {"kind": "app", "top": top, "exec": candidates[0][0], "icon": icons[0] if icons else ""}
+        desktops = sorted((r for r in names if r.lower().endswith(".desktop")), key=lambda r: r.count("/"))
+        return {"kind": "app", "top": top, "exec": candidates[0][0], "icon": icons[0] if icons else "",
+                "others": [] if squash(Path(candidates[0][0]).name) in squash(stem) or squash(stem) in squash(Path(candidates[0][0]).name)
+                  else [r for r, _ in candidates[1:4]], "desktop": desktops[0] if desktops else "",
+                "launcher_script": candidates[0][0].lower().endswith((".sh", ".py")),
+                "electron": any(r.endswith("chrome-sandbox") for r in names)}
     return {"kind": "unknown-archive", "top": top}
+
+
+def read_member(path: Path, member: str, limit: int = 20_000) -> str:
+    """Read one small text file out of an archive without extracting anything."""
+    try:
+        if path.name.lower().endswith(".zip"):
+            with zipfile.ZipFile(path) as zf:
+                return zf.open(member).read(limit).decode("utf-8", "replace")
+        with tarfile.open(path) as tf:
+            fh = tf.extractfile(member)
+            return fh.read(limit).decode("utf-8", "replace") if fh else ""
+    except (KeyError, tarfile.TarError, zipfile.BadZipFile, OSError):
+        return ""
+
+
+def parse_desktop(text: str) -> Dict[str, str]:
+    """Name, Comment and Categories from a bundled .desktop file (values are used as data only)."""
+    out: Dict[str, str] = {}
+    for line in text.splitlines():
+        if line.startswith("["):
+            if out:
+                break
+            continue
+        key, _, val = line.partition("=")
+        if key in ("Name", "Comment", "Categories") and val.strip() and "[" not in key:
+            out[key] = _CONTROL.sub("", val.strip())[:200]
+    return out
+
+
+def sandbox_works() -> bool:
+    """Can unprivileged user namespaces be created? Electron apps need that for their sandbox."""
+    return subprocess.run(["unshare", "-U", "true"], capture_output=True).returncode == 0 if shutil.which("unshare") else True
 
 
 # ---------------------------------------------------------------------------
@@ -328,6 +380,9 @@ def describe(info: Dict[str, Any]) -> str:
         if what == "source":
             return (f"{head}: source code ({info.get('build_system')}). Building from source is not supported yet; "
                     "tell the user it needs to be compiled and suggest the project's own instructions.")
+        if what == "installer-script":
+            return (f"{head}: contains its own installer ({info.get('script')}). Next: call install_from_file with "
+                    f"path={info['path']}; the user will see the script before it runs.")
         if what == "unknown-archive":
             return f"{head}: an archive with no recognisable app, theme or font. Ask the user what it is for."
         return f"{head}: {what} ({info.get('files')} files). Next: call install_from_file with path={info['path']}"
@@ -342,11 +397,14 @@ def _quote(p: Any) -> str:
     return shlex.quote(str(p))
 
 
-def _desktop_script(name: str, label: str, exec_path: Path, icon: str, comment: str) -> str:
+def _desktop_script(name: str, label: str, exec_path: Path, icon: str, comment: str,
+                    categories: str = "Utility;", exec_args: str = "") -> str:
     from agent.tools import render_desktop_entry
 
     desktop = APPS / f"{name}.desktop"
-    text = render_desktop_entry(label, str(exec_path), icon, "Utility;", comment)
+    text = render_desktop_entry(label, str(exec_path), icon, categories or "Utility;", comment)
+    if exec_args:
+        text = "\n".join(f"{line} {exec_args}" if line.startswith("Exec=") else line for line in text.splitlines())
     return (f"mkdir -p {_quote(APPS)}\n"
             f"printf '%s\\n' {_quote(text.rstrip())} > {_quote(desktop)}\n"
             f"update-desktop-database {_quote(APPS)} 2>/dev/null || true")
@@ -355,6 +413,42 @@ def _desktop_script(name: str, label: str, exec_path: Path, icon: str, comment: 
 def _guard_free(path: Path) -> str:
     return (f"if [ -e {_quote(path)} ]; then echo 'Already installed at {path}. "
             f"Remove it first.'; exit 1; fi")
+
+
+def _unpack_command(path: Path, top: Optional[str], dest: Path, is_zip: bool) -> str:
+    if is_zip and top:
+        return (f"mkdir -p {_quote(dest.parent)} && tmp=$(mktemp -d {_quote(dest.parent)}/.unpack.XXXXXX) && "
+                f"unzip -q -- {_quote(path)} -d \"$tmp\" && mv \"$tmp\"/{_quote(top)} {_quote(dest)} && rmdir \"$tmp\"")
+    if is_zip:
+        return f"mkdir -p {_quote(dest)} && unzip -q -- {_quote(path)} -d {_quote(dest)}"
+    return (f"mkdir -p {_quote(dest)} && tar -xf {_quote(path)} -C {_quote(dest)} --no-same-owner"
+            + (" --strip-components=1" if top else ""))
+
+
+def _library_check(exe: Path) -> str:
+    """Warn (never fail) when the program needs libraries this system doesn't have."""
+    return (f"missing=$(ldd {_quote(exe)} 2>/dev/null | grep 'not found' || true)\n"
+            'if [ -n "$missing" ]; then echo "Warning: missing libraries:"; echo "$missing"; fi')
+
+
+def self_installer_plan(path: Path, cls: Dict[str, Any], base: Dict[str, Any], is_zip: bool) -> Plan:
+    """The archive ships its own installer: unpack to a work folder and run it, with the script shown first."""
+    top, rel = cls["top"], cls["script"]
+    name = app_name(top or _stem(path))
+    work = HOME / ".local" / "share" / "linux-assistant" / "unpacked" / name
+    script_text = read_member(path, (top + "/" if top else "") + rel, 3000)
+    runner = f"python3 ./{shlex.quote(rel)}" if rel.endswith(".py") else f"bash ./{shlex.quote(rel)}"
+    steps = ["set -e", f"rm -rf {_quote(work)}", _unpack_command(path, top, work, is_zip),
+             f"cd {_quote(work)}", f"chmod +x {shlex.quote(rel)}", runner,
+             f"echo 'The installer finished. You can delete {work} now.'"]
+    head = "\n".join(script_text.splitlines()[:25])
+    notes = ["This archive comes with its own installer, and I can't predict what it changes. It may ask for your "
+             "password and write outside your home folder. Start of the script:\n" + head]
+    return Plan("installer", name, f"Run the {name} installer",
+                [f"Unpacks the archive into {work}", f"Runs its {rel}, which can change system files", "Check the script above first"],
+                "\n".join(steps), False, notes=notes,
+                record={**base, "name": name, "kind": "installer", "dirs": [str(work)], "files": [],
+                        "note": "Ran the vendor's own installer; remove it with the vendor's uninstaller."})
 
 
 def build_plan(path: Path) -> Plan:
@@ -428,28 +522,34 @@ def build_plan(path: Path) -> Plan:
                         "\n".join(["set -e", _guard_free(dest), extract, tail, f"echo 'Installed. {how}'"]),
                         record={**base, "name": stem, "kind": what, "dirs": [str(dest)]})
 
+        if what == "installer-script":
+            return self_installer_plan(path, cls, base, is_zip)
+
         # Application bundle
         dest = OPT / stem
         exe = dest / cls["exec"]  # paths in `cls` are relative to the unwrapped root
         link = BIN / stem
         icon = str(dest / cls["icon"]) if cls.get("icon") else ""
-        if is_zip and top:
-            unpack = (f"mkdir -p {_quote(OPT)} && tmp=$(mktemp -d {_quote(OPT)}/.unpack.XXXXXX) && "
-                      f"unzip -q -- {_quote(path)} -d \"$tmp\" && mv \"$tmp\"/{_quote(top)} {_quote(dest)} && rmdir \"$tmp\"")
-        elif is_zip:
-            unpack = f"mkdir -p {_quote(dest)} && unzip -q -- {_quote(path)} -d {_quote(dest)}"
-        else:
-            unpack = (f"mkdir -p {_quote(dest)} && tar -xf {_quote(path)} -C {_quote(dest)} --no-same-owner"
-                      + (" --strip-components=1" if top else ""))
+        unpack = _unpack_command(path, top, dest, is_zip)
+        bundled = parse_desktop(read_member(path, (top + "/" if top else "") + cls["desktop"])) if cls.get("desktop") else {}
+        notes: List[str] = []
+        exec_args = ""
+        if cls.get("electron") and not sandbox_works():
+            exec_args = "--no-sandbox"
+            notes.append("This system blocks the app's sandbox, so the launcher starts it with --no-sandbox.")
+        if cls.get("launcher_script"):
+            notes.append(f"This app starts through a script ({cls['exec']}); make sure Java or other tools it needs are installed.")
+        if cls.get("others"):
+            notes.append("Other programs in the archive: " + ", ".join(cls["others"]) + ". If this doesn't start the right one, tell me.")
         script = "\n".join([
             "set -e", _guard_free(dest), unpack,
             f"chmod +x {_quote(exe)}", f"mkdir -p {_quote(BIN)}", f"ln -sf {_quote(exe)} {_quote(link)}",
-            _desktop_script(stem, stem.replace("-", " ").replace("_", " ").title(), exe, icon, f"{stem} (installed by Linux Assistant)"),
+            _desktop_script(stem, bundled.get("Name") or stem.replace("-", " ").replace("_", " ").title(), exe, icon,
+                            bundled.get("Comment") or f"{stem} (installed by Linux Assistant)",
+                            bundled.get("Categories", "Utility;"), exec_args),
+            _library_check(exe),
             f"echo 'Installed {stem}.'",
         ])
-        notes = []
-        if re.search(r"electron|chrome-sandbox", " ".join(m.path for m in members[:5000]), re.I):
-            notes.append("This looks like an Electron app; if it won't start, it may need to be launched with --no-sandbox.")
         return Plan("app", stem, f"Install {stem}",
                     [f"Unpacks it into {dest}", f"Adds a launcher to your app menu and `{stem}` to your terminal",
                      "No password needed"], script, notes=notes,
@@ -515,6 +615,9 @@ def find_record(query: str) -> Dict[str, Any]:
 def build_removal(query: str) -> Plan:
     rec = find_record(query)
     label = rec.get("label") or rec["name"]
+    if rec.get("kind") == "installer":
+        raise InstallError(f"{label} was set up by its own installer, so I don't know everything it changed. "
+                           "Use the uninstaller that came with it.")
     if rec.get("kind") == "package":
         return Plan("remove", rec["name"], f"Remove {label}", [f"Removes {rec['package']} from your system", "Needs your password"],
                     f"set -e\n{rec['remove']}", True, record={"forget": rec["name"]})

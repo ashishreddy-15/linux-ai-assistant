@@ -111,6 +111,73 @@ class TestApps(InstallerCase):
         self.assertTrue(os.access(self.home / ".local/opt/cool-app/Cool-App.AppImage", os.X_OK))
 
 
+class TestHarderArchives(InstallerCase):
+    def test_vendor_installer_runs_from_work_folder_and_shows_script(self):
+        path = self.tar("tool-1.0.tar.gz", {
+            "tool-1.0/install.sh": (b"#!/bin/bash\ntouch \"$HOME/installed-by-vendor\"\n", 0o755),
+            "tool-1.0/data.bin": (b"x", 0o644),
+        })
+        self.assertIn("own installer", installer.execute_inspect_download(str(path)))
+        plan = installer.build_plan(path)
+        self.assertEqual(plan.kind, "installer")
+        self.assertIn("touch", plan.notes[0])
+        result = self.run_plan(plan)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((self.home / "installed-by-vendor").exists())
+        installer.save_record(plan.record)
+        with self.assertRaises(installer.InstallError):
+            installer.build_removal("tool")
+
+    def test_launcher_script_app(self):
+        path = self.tar("jtool.tar.gz", {
+            "jtool/bin/jtool.sh": (b"#!/bin/sh\n", 0o755), "jtool/lib/a.jar": (b"x", 0o644),
+            "jtool/install-docs.sh": (b"#!/bin/sh\n", 0o755)})
+        plan = installer.build_plan(path)
+        self.assertEqual(self.run_plan(plan).returncode, 0)
+        self.assertTrue((self.home / ".local/opt/jtool/bin/jtool.sh").exists())
+        self.assertTrue(any("script" in n for n in plan.notes))
+
+    def test_missing_permission_bits(self):
+        path = self.tar("flat.tar.gz", {"flat/flat": (b"#!/bin/sh\n", 0o644), "flat/readme.txt": (b"x", 0o644)})
+        plan = installer.build_plan(path)
+        self.assertEqual(self.run_plan(plan).returncode, 0)
+        self.assertTrue(os.access(self.home / ".local/opt/flat/flat", os.X_OK))
+
+    def test_several_programs_lists_the_others(self):
+        path = self.tar("suite.tar.gz", {
+            "suite/alpha": (b"x", 0o755), "suite/beta": (b"x", 0o755), "suite/gamma": (b"x", 0o755)})
+        plan = installer.build_plan(path)
+        self.assertTrue(any("Other programs" in n for n in plan.notes))
+        clear = installer.build_plan(self.tar("solo.tar.gz", {"solo/solo": (b"x", 0o755), "solo/other": (b"x", 0o755)}))
+        self.assertFalse(any("Other programs" in n for n in clear.notes))
+
+    def test_bundled_desktop_file_supplies_category_and_name(self):
+        path = self.tar("edit.tar.gz", {
+            "edit/edit": (b"x", 0o755),
+            "edit/edit.desktop": (b"[Desktop Entry]\nName=Super Edit\nCategories=Development;TextEditor;\nExec=evil\n", 0o644)})
+        self.assertEqual(self.run_plan(installer.build_plan(path)).returncode, 0)
+        text = (self.home / ".local/share/applications/edit.desktop").read_text()
+        self.assertIn("Name=Super Edit", text)
+        self.assertIn("Categories=Development;TextEditor;", text)
+        self.assertNotIn("evil", text)
+
+    def test_electron_without_sandbox_support_gets_flag(self):
+        path = self.tar("el.tar.gz", {"el/el": (b"x", 0o755), "el/chrome-sandbox": (b"x", 0o755)})
+        with patch.object(installer, "sandbox_works", return_value=False):
+            plan = installer.build_plan(path)
+        self.run_plan(plan)
+        self.assertIn("--no-sandbox", (self.home / ".local/share/applications/el.desktop").read_text())
+        with patch.object(installer, "sandbox_works", return_value=True):
+            plan = installer.build_plan(path)
+        self.assertNotIn("--no-sandbox", plan.script)
+
+    def test_missing_library_warns_but_succeeds(self):
+        path = self.tar("lib.tar.gz", {"lib/lib": (b"#!/bin/sh\n", 0o755)})
+        plan = installer.build_plan(path)
+        self.assertIn("ldd", plan.script)
+        self.assertEqual(self.run_plan(plan).returncode, 0)
+
+
 class TestThemes(InstallerCase):
     def test_cursor_theme(self):
         path = self.tar("GoogleDot-Black.tar.gz", {
