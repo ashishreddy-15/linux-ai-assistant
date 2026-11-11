@@ -75,12 +75,16 @@ def slugify(text: str) -> str:
     return slug or "app"
 
 
+_VERSION_TAIL = re.compile(r"[-_]v?\d+(\.\d+)*([-_.]?(rc|beta|alpha)\d*)?$", re.I)
 _PLATFORM_TAIL = re.compile(r"([._-](linux|x64|x86[_-]64|amd64|64bit|64|generic))+$", re.I)
 
 
 def app_name(raw: str) -> str:
     """A short slug without platform suffixes: 'Antigravity-x64' -> 'antigravity'."""
-    return slugify(_PLATFORM_TAIL.sub("", raw) or raw)
+    name = raw
+    for _ in range(2):  # 'App-1.2-linux-x64' -> 'App-1.2-linux' ... -> 'App'
+        name = _VERSION_TAIL.sub("", _PLATFORM_TAIL.sub("", name)) or name
+    return slugify(name or raw)
 
 
 def _stem(path: Path) -> str:
@@ -98,7 +102,7 @@ def find_download(query: str) -> Path:
         raise InstallError("No file name was given.")
     p = Path(q).expanduser()
     if p.is_absolute() or "/" in q:
-        if p.is_file():
+        if p.is_file() or p.is_dir():
             return p.resolve()
         raise InstallError(f"There is no file at {p}.")
     words = [w for w in re.split(r"[^a-z0-9]+", q.lower()) if w]
@@ -348,6 +352,13 @@ def _package_manager() -> str:
 
 def inspect_file(path: Path) -> Dict[str, Any]:
     """Describe a downloaded file. Never extracts or runs it."""
+    if path.is_dir():
+        first = {e.name for e in path.iterdir()}
+        from agent import builder
+
+        system = builder.detect_system(first)
+        return {"path": str(path), "file": path.name, "kind": "directory", "size_mb": 0.0,
+                "what": "source" if system else "unknown-archive", "build_system": system}
     kind = _file_type(path)
     info: Dict[str, Any] = {"path": str(path), "file": path.name, "kind": kind,
                             "size_mb": round(path.stat().st_size / 1e6, 1)}
@@ -378,14 +389,25 @@ def describe(info: Dict[str, Any]) -> str:
     if kind == "archive":
         what = info.get("what")
         if what == "source":
-            return (f"{head}: source code ({info.get('build_system')}). Building from source is not supported yet; "
-                    "tell the user it needs to be compiled and suggest the project's own instructions.")
+            from agent import builder
+
+            text = builder.describe_source(info.get("build_system"))
+            return f"{head}: {text}" + (f"\nNext: call install_from_file with path={info['path']}"
+                                       if info.get("build_system") in builder.SYSTEMS else "")
         if what == "installer-script":
             return (f"{head}: contains its own installer ({info.get('script')}). Next: call install_from_file with "
                     f"path={info['path']}; the user will see the script before it runs.")
         if what == "unknown-archive":
             return f"{head}: an archive with no recognisable app, theme or font. Ask the user what it is for."
         return f"{head}: {what} ({info.get('files')} files). Next: call install_from_file with path={info['path']}"
+    if kind == "directory":
+        if info.get("what") == "source":
+            from agent import builder
+
+            text = builder.describe_source(info.get("build_system"))
+            return f"{info['file']} (folder): {text}" + (f"\nNext: call install_from_file with path={info['path']}"
+                                                        if info.get("build_system") in builder.SYSTEMS else "")
+        return f"{info['file']} (folder): no recognisable project. Ask the user what it is."
     if kind == "appimage":
         return f"{head}: an AppImage. Next: call install_from_file with path={info['path']}"
     if kind in ("binary", "script"):
@@ -454,6 +476,13 @@ def self_installer_plan(path: Path, cls: Dict[str, Any], base: Dict[str, Any], i
 def build_plan(path: Path) -> Plan:
     info = inspect_file(path)
     kind = info["kind"]
+    if kind == "directory":
+        if info["what"] != "source":
+            raise InstallError(describe(info))
+        from agent import builder
+
+        return builder.plan_source(path, info["build_system"], None, {"name": slugify(path.name), "label": path.name,
+                                   "source": str(path), "date": time.strftime("%Y-%m-%d %H:%M")}, False)
     label = (info.get("name") or _stem(path)).replace("-", " ").replace("_", " ")
     name = slugify(info.get("name") or _stem(path))
     now = time.strftime("%Y-%m-%d %H:%M")
@@ -498,9 +527,13 @@ def build_plan(path: Path) -> Plan:
         members = list_archive(path)
         cls = classify_archive(members)
         what, top = cls["kind"], cls["top"]
-        if what in ("source", "unknown-archive"):
-            raise InstallError(describe(info))
         is_zip = path.name.lower().endswith(".zip")
+        if what == "source":
+            from agent import builder
+
+            return builder.plan_source(path, cls["build_system"], top, base, is_zip)
+        if what == "unknown-archive":
+            raise InstallError(describe(info))
         stem = app_name(top or _stem(path))
 
         if what in ("cursor-theme", "icon-theme", "gtk-theme", "fonts"):
@@ -615,6 +648,10 @@ def find_record(query: str) -> Dict[str, Any]:
 def build_removal(query: str) -> Plan:
     rec = find_record(query)
     label = rec.get("label") or rec["name"]
+    if rec.get("kind") == "built":
+        from agent import builder
+
+        return builder.build_removal(rec)
     if rec.get("kind") == "installer":
         raise InstallError(f"{label} was set up by its own installer, so I don't know everything it changed. "
                            "Use the uninstaller that came with it.")

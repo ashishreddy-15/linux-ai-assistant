@@ -53,7 +53,7 @@ from google.genai import types
 
 from agent.events import Signal, Slot
 from agent.llm_client import BaseLLMClient, GeminiAgentClient
-from agent import downloads, installer
+from agent import builder, downloads, installer
 from agent.package_search import execute_search_packages
 from agent.tools import (
     MUTATING_TOOLS,
@@ -118,6 +118,7 @@ class AgentOrchestrator:
         # Pending tool call kept while AWAITING_APPROVAL
         self._pending_tool_call: Optional[types.FunctionCall] = None
         self._pending_plan: Optional[tuple] = None
+        self._build_failures = 0
         self._executing_tool_call: Optional[types.FunctionCall] = None
 
         # A model turn may contain several tool calls. They are handled one at
@@ -147,6 +148,7 @@ class AgentOrchestrator:
     def clear_history(self) -> None:
         """Reset the conversation to an empty state."""
         self._history.clear()
+        self._build_failures = 0
         self._batch.clear()
         self._batch_results = []
         self._set_state(OrchestratorState.IDLE)
@@ -309,6 +311,9 @@ class AgentOrchestrator:
                 self._handle_mutating_tool(fc, plan=value)
                 return True  # paused: the download needs approval
             result = value
+        elif fc.name == "find_package_for":
+            self.tool_activity.emit("looked up which package provides the missing piece")
+            result = builder.execute_find_package_for(args.get("error", ""))
         elif fc.name == "search_packages":
             query = args.get("query", "")
             self.tool_activity.emit(f"searched packages for “{query}”")
@@ -333,6 +338,10 @@ class AgentOrchestrator:
                 plan = installer.build_removal(args.get("name", ""))
         except (installer.InstallError, OSError) as exc:
             self._add_result(fc, f"ERROR: {exc}")
+            self._process_next()
+            return None
+        if plan.kind == "build" and self._build_failures >= self.MAX_BUILD_ATTEMPTS:
+            self._add_result(fc, "ERROR: the build already failed 3 times. Tell the user what is missing; do not try again.")
             self._process_next()
             return None
         return plan
@@ -415,14 +424,33 @@ class AgentOrchestrator:
     # Internal: command execution
     # ------------------------------------------------------------------
 
-    def _record_plan(self, exit_code: int, tool_call: types.FunctionCall) -> None:
-        """Remember what a successful install changed, so it can be removed later."""
+    MAX_BUILD_ATTEMPTS = 3
+
+    def _record_plan(self, exit_code: int, tool_call: types.FunctionCall) -> str:
+        """Remember what a successful install changed, so it can be removed later.
+
+        Returns extra text for the model (build retry guidance), or "".
+        """
         pending, self._pending_plan = self._pending_plan, None
-        if pending is None or pending[0] is not tool_call or exit_code != 0:
-            return
+        if pending is None or pending[0] is not tool_call:
+            return ""
+        hint = ""
+        if pending[1].kind == "build":
+            if exit_code == 0:
+                self._build_failures = 0
+            else:
+                self._build_failures += 1
+                n = self._build_failures
+                hint = (f"\n\nBuild attempt {n} of {self.MAX_BUILD_ATTEMPTS} failed. " +
+                        ("Stop here: tell the user plainly what is missing or failing and do not try again."
+                         if n >= self.MAX_BUILD_ATTEMPTS else
+                         "If a header, library or tool is missing, call find_package_for with the exact error line, "
+                         "install that package, then call install_from_file again."))
+        if exit_code != 0:
+            return hint
         record = pending[1].record
         if not record:
-            return
+            return hint
         try:
             if "forget" in record:
                 installer.forget_record(record["forget"])
@@ -430,6 +458,7 @@ class AgentOrchestrator:
                 installer.save_record(record)
         except OSError:
             logger.warning("Could not save the install record", exc_info=True)
+        return hint
 
     def install_file(self, path: str) -> None:
         """Start an install for a file the user picked, without asking the model."""
@@ -509,7 +538,7 @@ class AgentOrchestrator:
         tool_call: types.FunctionCall,
     ) -> None:
         """Feed execution results back into the LLM conversation."""
-        self._record_plan(exit_code, tool_call)
+        hint = self._record_plan(exit_code, tool_call)
         self.command_finished.emit(exit_code, tail_log)
         self._cmd_runner = None
         self._cmd_thread = None
@@ -519,7 +548,7 @@ class AgentOrchestrator:
                 f"Command failed with exit code {exit_code}. Terminal output: {tail_log}\n\n"
                 "Please acknowledge this failure to the user, diagnose the error based on the terminal output, "
                 "and propose a corrective tool call to resolve it."
-            )
+            ) + hint
         else:
             result_text = (
                 f"Command execution SUCCESS.\n"

@@ -214,9 +214,9 @@ class TestSafety(InstallerCase):
         self.assertFalse((self.home / "pwned").exists())
         self.assertFalse(Path("pwned").exists())
 
-    def test_source_is_not_installed(self):
-        path = self.tar("proj.tar.gz", {"proj/CMakeLists.txt": (b"", 0o644)})
-        self.assertIn("source code", installer.execute_inspect_download(str(path)))
+    def test_unsupported_source_is_not_built(self):
+        path = self.tar("proj.tar.gz", {"proj/setup.py": (b"", 0o644)})
+        self.assertIn("can't build", installer.execute_inspect_download(str(path)))
         with self.assertRaises(installer.InstallError):
             installer.build_plan(path)
 

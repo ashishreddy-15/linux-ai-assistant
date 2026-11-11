@@ -227,6 +227,11 @@ _install_from_file = _path_tool(
     "Install a downloaded file. The app builds the exact steps and the user approves them. "
     "Call inspect_download first and pass the path it gave.",
     "path", "Full path of the file, as returned by inspect_download.")
+_find_package_for = _path_tool(
+    "find_package_for",
+    "After a build fails, find the system package that provides a missing header or library. "
+    "Read-only. Pass the exact error line.",
+    "error", "The build error line, e.g. 'fatal error: zlib.h: No such file or directory'.")
 _uninstall_app = _path_tool(
     "uninstall_app",
     "Remove an app that was installed from a downloaded file by this assistant. The user approves the steps.",
@@ -247,6 +252,7 @@ AGENT_TOOLS: types.Tool = types.Tool(
         _inspect_download,
         _install_from_file,
         _uninstall_app,
+        _find_package_for,
     ]
 )
 
@@ -267,6 +273,7 @@ READONLY_TOOLS: frozenset[str] = frozenset({
     "inspect_manual",
     "search_packages",
     "inspect_download",
+    "find_package_for",
 })
 
 #: Standard OpenAI-formatted tool schemas for Groq / OpenAI-compatible endpoints
@@ -468,6 +475,7 @@ OPENAI_TOOLS.extend([
     _openai_path_tool(_inspect_download, "name"),
     _openai_path_tool(_install_from_file, "path"),
     _openai_path_tool(_uninstall_app, "name"),
+    _openai_path_tool(_find_package_for, "error"),
 ])
 
 
@@ -568,6 +576,10 @@ def normalize_tool_args(name: str, raw_args: Any) -> Dict[str, Any]:
             or args.get("app") or args.get("term") or args.get("search")
         )
         args = {"query": str(val or "").strip()}
+
+    elif name == "find_package_for":
+        val = next((args.get(k) for k in ("error", "query", "name", "header", "library", "message") if args.get(k)), "")
+        args = {"error": str(val or "").strip()}
 
     elif name in ("inspect_download", "install_from_file", "uninstall_app"):
         key = "path" if name == "install_from_file" else "name"

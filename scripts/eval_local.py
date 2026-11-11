@@ -55,6 +55,22 @@ def flathub_failure() -> List[types.Content]:
     ]
 
 
+def build_failure() -> List[types.Content]:
+    call = types.FunctionCall(name="install_from_file", id="call_0", args={"path": "/tmp/hello-1.0.tar.gz"})
+    return [
+        user("I downloaded the source code of hello, build and install it"),
+        types.Content(role="model", parts=[types.Part(function_call=call)]),
+        types.Content(role="user", parts=[types.Part(function_response=types.FunctionResponse(
+            id="call_0", name="install_from_file", response={"output": (
+                "Command failed with exit code 2. Terminal output: hello.c:1:10: fatal error: zlib.h: "
+                "No such file or directory\n compilation terminated.\nmake: *** [Makefile:3: hello] Error 1\n\n"
+                "Please acknowledge this failure to the user, diagnose the error based on the terminal output, "
+                "and propose a corrective tool call to resolve it.\n\nBuild attempt 1 of 3 failed. If a header, "
+                "library or tool is missing, call find_package_for with the exact error line, install that package, "
+                "then call install_from_file again.")}))]),
+    ]
+
+
 def app_install(app_id: str) -> Callable[[str], bool]:
     """Correct if it installs the exact Flathub ID, or first sets up Flathub."""
     return lambda c: (app_id in c and "flatpak" in c) or "remote-add" in c
@@ -81,6 +97,8 @@ TASKS = [
     ("file: antigravity", [user("I downloaded the Antigravity tarball. Install it and add it to my app menu.")], "change", has(r"^/.*Antigravity"), False),
     ("file: cursor theme", [user("install the GoogleDot cursor theme I downloaded")], "change", has(r"^/.*GoogleDot"), False),
     ("download: ayugram", [user("download AyuGram for me, I don't have the file")], "change", has(r"(?i)ayugram"), False),
+    ("source: build", [user("I downloaded the source code of hello (hello-1.0.tar.gz), build and install it")], "change", has(r"^/.*hello-1\.0"), False),
+    ("recover: build error", build_failure(), "change", has("devel", "zlib"), False),
     ("recover: no flathub", flathub_failure(), "change", has("remote-add"), False),
 ]
 
@@ -103,6 +121,7 @@ def make_fixtures() -> None:
                 tf.addfile(info, io.BytesIO(b"x"))
 
     pack("Antigravity-linux-x64.tar.gz", {"Antigravity/antigravity": 0o755, "Antigravity/resources/icon.png": 0o644})
+    pack("hello-1.0.tar.gz", {"hello-1.0/Makefile": 0o644, "hello-1.0/hello.c": 0o644})
     pack("GoogleDot-Black.tar.gz", {"GoogleDot-Black/index.theme": 0o644, "GoogleDot-Black/cursors/left_ptr": 0o644})
 
 
@@ -112,6 +131,10 @@ def run_readonly(fc: types.FunctionCall) -> str:
         return execute_search_packages(str(args.get("query", "")))
     if fc.name == "inspect_manual":
         return execute_inspect_manual(str(args.get("command_or_topic", "")))
+    if fc.name == "find_package_for":
+        from agent import builder
+
+        return builder.execute_find_package_for(str(args.get("error", "")))
     if fc.name == "inspect_download":
         from agent import downloads
 

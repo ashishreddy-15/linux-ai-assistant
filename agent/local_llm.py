@@ -65,14 +65,15 @@ _SHORT_DESCRIPTIONS = {
     "search_packages": "Find exact app IDs and package names (read-only). Use before every install.",
     "inspect_download": "Check a downloaded file (rpm, tar.gz, zip, AppImage) by name. Offers to download it if missing.",
     "install_from_file": "Install a downloaded file. The app builds the steps; the user approves.",
+    "find_package_for": "Find the system package for a missing header or library from a build error (read-only).",
     "uninstall_app": "Remove an app that was installed from a downloaded file.",
 }
 
 
-FILE_TOOLS = frozenset({"inspect_download", "install_from_file", "uninstall_app"})
+FILE_TOOLS = frozenset({"inspect_download", "install_from_file", "uninstall_app", "find_package_for"})
 _FILE_HINT = re.compile(
     r"download|tar\.?gz|tarball|\.tgz|\.zip|\.rpm|\.deb|appimage|archive|installer|"
-    r"uninstall|remove .*\b(app|installed)|proton ?vpn|antigravity|ayugram", re.I)
+    r"uninstall|remove .*\b(app|installed)|proton ?vpn|antigravity|ayugram|compile|build|source code|from source|make install|cmake|cargo", re.I)
 
 
 def wants_file_tools(history: List[types.Content]) -> bool:
