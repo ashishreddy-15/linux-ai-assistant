@@ -16,6 +16,7 @@ from ui.chat import ChatView  # noqa: E402
 from ui.controller import AppController  # noqa: E402
 from ui.home import HomePage  # noqa: E402
 from ui.local_setup import LocalSetupDialog  # noqa: E402
+from ui.models import ModelsDialog  # noqa: E402
 from ui.onboarding import Onboarding  # noqa: E402
 from ui.preferences import PreferencesDialog  # noqa: E402
 from ui.widgets import APP_ICON, clamp, glow_line, label, mono  # noqa: E402
@@ -51,6 +52,7 @@ class MainWindow(Adw.ApplicationWindow):
         self._orch = orchestrator
         self._controller = controller
         self._card: Optional[ActionCard] = None
+        self._models: Optional[ModelsDialog] = None
         self._state = orchestrator.state.value
 
         self._toasts = Adw.ToastOverlay()
@@ -87,6 +89,7 @@ class MainWindow(Adw.ApplicationWindow):
         self._header.pack_start(new_btn)
         menu = Gio.Menu()
         menu.append("New conversation", "win.new-chat")
+        menu.append("Local models…", "win.models")
         menu.append("Preferences", "win.preferences")
         menu.append("About Linux Assistant", "win.about")
         self._header.pack_end(Gtk.MenuButton(icon_name="open-menu-symbolic", menu_model=menu, tooltip_text="Main menu"))
@@ -135,6 +138,7 @@ class MainWindow(Adw.ApplicationWindow):
         for name, handler in (
             ("new-chat", self._new_chat),
             ("preferences", self._open_preferences),
+            ("models", self._open_models),
             ("about", self._about),
         ):
             action = Gio.SimpleAction.new(name, None)
@@ -143,6 +147,7 @@ class MainWindow(Adw.ApplicationWindow):
         app = self.get_application()
         app.set_accels_for_action("win.new-chat", ["<Control>n"])
         app.set_accels_for_action("win.preferences", ["<Control>comma"])
+        app.set_accels_for_action("win.models", ["<Control>m"])
 
     def _connect_orchestrator(self) -> None:
         o = self._orch
@@ -194,7 +199,12 @@ class MainWindow(Adw.ApplicationWindow):
         self._home.focus()
 
     def _open_preferences(self) -> None:
-        PreferencesDialog(self._controller, self._refresh_home, self._open_local_setup).present(self)
+        PreferencesDialog(self._controller, self._refresh_home, self._open_local_setup, self._open_models).present(self)
+
+    def _open_models(self) -> None:
+        if self._models is None:  # one instance for the session, so downloads keep their progress
+            self._models = ModelsDialog(self._controller, self._refresh_home, self._open_local_setup)
+        self._models.show_for(self)
 
     def _setup_ai(self) -> None:
         if self._controller.active_provider() == "ollama":
