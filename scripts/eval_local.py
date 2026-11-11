@@ -80,6 +80,7 @@ TASKS = [
     ("file: proton rpm", [user("I downloaded the Proton VPN rpm, install it")], "change", has(r"^/.*protonvpn"), False),
     ("file: antigravity", [user("I downloaded the Antigravity tarball. Install it and add it to my app menu.")], "change", has(r"^/.*Antigravity"), False),
     ("file: cursor theme", [user("install the GoogleDot cursor theme I downloaded")], "change", has(r"^/.*GoogleDot"), False),
+    ("download: ayugram", [user("download AyuGram for me, I don't have the file")], "change", has(r"(?i)ayugram"), False),
     ("recover: no flathub", flathub_failure(), "change", has("remote-add"), False),
 ]
 
@@ -112,7 +113,10 @@ def run_readonly(fc: types.FunctionCall) -> str:
     if fc.name == "inspect_manual":
         return execute_inspect_manual(str(args.get("command_or_topic", "")))
     if fc.name == "inspect_download":
-        return installer.execute_inspect_download(str(args.get("name", "")))
+        from agent import downloads
+
+        kind, value = downloads.inspect_or_offer(str(args.get("name", "")), installer._package_manager(), [])
+        return value if kind == "text" else f"DOWNLOAD OFFERED: {value.title}"
     if fc.name == "read_file_snippet":
         return execute_read_file_snippet(str(args.get("file_path", "")), int(args.get("max_lines", 100)))
     return f"ERROR: unknown tool {fc.name}"
@@ -132,15 +136,23 @@ def run_task(client: OllamaAgentClient, history: List[types.Content]) -> dict:
         changes = [c for c in calls if c.name not in READONLY_TOOLS]
         if changes:
             c = changes[0]
-            return {"kind": "change", "tool": c.name, "command": str((c.args or {}).get("command") or (c.args or {}).get("path", "")),
+            command = str((c.args or {}).get("command") or (c.args or {}).get("path") or (c.args or {}).get("name", ""))
+            swapped = installer.handwritten_install_target(command) if c.name == "propose_shell_command" else None
+            if swapped:  # the app swaps in the verified plan for hand-written unpack/install commands
+                command = str(swapped)
+            return {"kind": "change", "tool": c.name, "command": command,
                     "title": (c.args or {}).get("title", ""), "used": used, "secs": time.monotonic() - start}
         if not calls:
             return {"kind": "text", "text": text, "used": used, "secs": time.monotonic() - start}
         results = []
         for c in calls:
             used.append(c.name)
+            out = run_readonly(c)
+            if out.startswith("DOWNLOAD OFFERED"):
+                return {"kind": "change", "tool": c.name, "command": str((c.args or {}).get("name", "")),
+                        "title": out, "used": used, "secs": time.monotonic() - start}
             results.append(types.Part(function_response=types.FunctionResponse(
-                id=c.id or "", name=c.name, response={"output": run_readonly(c)})))
+                id=c.id or "", name=c.name, response={"output": out})))
         history.append(types.Content(role="user", parts=results))
     return {"kind": "stuck", "used": used, "secs": time.monotonic() - start}
 

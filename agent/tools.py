@@ -219,7 +219,8 @@ def _path_tool(name: str, description: str, prop: str, prop_desc: str) -> types.
 _inspect_download = _path_tool(
     "inspect_download",
     "Look at a downloaded file (RPM, DEB, tarball, zip, AppImage) without running it and say what it is "
-    "and how to install it. Read-only. Use when the user mentions a file or an app that must be installed from a download.",
+    "and how to install it. Read-only. Use when the user mentions a file or an app that must be installed from a download. "
+    "If the file isn't on the computer but the app has a verified download, this offers to download it for the user.",
     "name", "File name or part of it (e.g. 'protonvpn', 'antigravity'), or a full path.")
 _install_from_file = _path_tool(
     "install_from_file",

@@ -63,10 +63,31 @@ _SHORT_DESCRIPTIONS = {
     "read_file_snippet": "Read the first lines of a text file (read-only, no approval needed).",
     "inspect_manual": "Show the man page or --help for one command name (read-only).",
     "search_packages": "Find exact app IDs and package names (read-only). Use before every install.",
-    "inspect_download": "Check a downloaded file (rpm, tar.gz, zip, AppImage) by name (read-only).",
+    "inspect_download": "Check a downloaded file (rpm, tar.gz, zip, AppImage) by name. Offers to download it if missing.",
     "install_from_file": "Install a downloaded file. The app builds the steps; the user approves.",
     "uninstall_app": "Remove an app that was installed from a downloaded file.",
 }
+
+
+FILE_TOOLS = frozenset({"inspect_download", "install_from_file", "uninstall_app"})
+_FILE_HINT = re.compile(
+    r"download|tar\.?gz|tarball|\.tgz|\.zip|\.rpm|\.deb|appimage|archive|installer|"
+    r"uninstall|remove .*\b(app|installed)|proton ?vpn|antigravity|ayugram", re.I)
+
+
+def wants_file_tools(history: List[types.Content]) -> bool:
+    """File-install tools are shown only when the chat is about a download.
+
+    Every extra tool schema makes a small model likelier to misuse it on plain
+    install requests ("install vlc"), so they stay hidden otherwise.
+    """
+    for content in history:
+        for part in content.parts or []:
+            if part.function_call and part.function_call.name in FILE_TOOLS:
+                return True
+            if content.role == "user" and part.text and _FILE_HINT.search(part.text):
+                return True
+    return False
 
 
 def compact_tools() -> List[Dict[str, Any]]:
@@ -270,7 +291,8 @@ class OllamaAgentClient(BaseLLMClient):
 
     # ------------------------------------------------------------------
 
-    def _request_body(self, messages: List[Dict[str, Any]], use_tools: bool = True) -> Dict[str, Any]:
+    def _request_body(self, messages: List[Dict[str, Any]], use_tools: bool = True,
+                      tools: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         body: Dict[str, Any] = {
             "model": self._model,
             "messages": messages,
@@ -283,7 +305,7 @@ class OllamaAgentClient(BaseLLMClient):
             },
         }
         if use_tools:
-            body["tools"] = self._tools
+            body["tools"] = tools if tools is not None else self._tools
         if self._think_supported is not False:
             # Reasoning models think for minutes on a laptop CPU; turn it off.
             body["think"] = False
@@ -324,14 +346,16 @@ class OllamaAgentClient(BaseLLMClient):
     ) -> types.GenerateContentResponse:
         messages = history_to_ollama_messages(history, self._system_prompt)
         messages = trim_messages(messages, self._num_ctx - _REPLY_RESERVE_TOKENS)
-        body = self._request_body(messages)
+        tools = self._tools if wants_file_tools(history) else [
+            t for t in self._tools if t["function"]["name"] not in FILE_TOOLS]
+        body = self._request_body(messages, tools=tools)
         try:
             return self._run(body, on_chunk)
         except LocalModelError as exc:
             text = str(exc).lower()
             if "think" in text and self._think_supported is not False:
                 self._think_supported = False
-                return self._run(self._request_body(messages), on_chunk)
+                return self._run(self._request_body(messages, tools=tools), on_chunk)
             if "does not support tools" in text:
                 raise LocalModelError(
                     f"The model “{self._model}” can't use tools, so it can't run commands. "

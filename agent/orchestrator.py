@@ -53,7 +53,7 @@ from google.genai import types
 
 from agent.events import Signal, Slot
 from agent.llm_client import BaseLLMClient, GeminiAgentClient
-from agent import installer
+from agent import downloads, installer
 from agent.package_search import execute_search_packages
 from agent.tools import (
     MUTATING_TOOLS,
@@ -289,7 +289,7 @@ class AgentOrchestrator:
     # Internal: tool handling
     # ------------------------------------------------------------------
 
-    def _handle_readonly_tool(self, fc: types.FunctionCall) -> None:
+    def _handle_readonly_tool(self, fc: types.FunctionCall) -> bool:
         """Execute a read-only tool immediately and continue the LLM loop."""
         args: Dict[str, Any] = normalize_tool_args(fc.name, fc.args)
 
@@ -304,7 +304,11 @@ class AgentOrchestrator:
             result = execute_inspect_manual(topic)
         elif fc.name == "inspect_download":
             self.tool_activity.emit(f"looked at the download “{args.get('name', '')}”")
-            result = installer.execute_inspect_download(args.get("name", ""))
+            kind, value = downloads.inspect_or_offer(args.get("name", ""), installer._package_manager(), self._pasted_urls())
+            if kind == "plan":
+                self._handle_mutating_tool(fc, plan=value)
+                return True  # paused: the download needs approval
+            result = value
         elif fc.name == "search_packages":
             query = args.get("query", "")
             self.tool_activity.emit(f"searched packages for “{query}”")
@@ -313,6 +317,12 @@ class AgentOrchestrator:
             result = f"ERROR: Unhandled readonly tool '{fc.name}'."
 
         self._add_result(fc, result)
+        return False
+
+    def _pasted_urls(self) -> List[str]:
+        """https links the user typed themselves (never ones from the model or from tool output)."""
+        texts = [p.text for c in self._history if c.role == "user" for p in (c.parts or []) if p.text]
+        return downloads.user_urls(texts)
 
     def _plan_for(self, fc: types.FunctionCall, args: Dict[str, Any]) -> Optional["installer.Plan"]:
         """Build an install/removal plan, or answer the model with why not."""
@@ -327,15 +337,21 @@ class AgentOrchestrator:
             return None
         return plan
 
-    def _handle_mutating_tool(self, fc: types.FunctionCall) -> None:
+    def _handle_mutating_tool(self, fc: types.FunctionCall, plan: Optional["installer.Plan"] = None) -> None:
         """Pause execution and emit approval_requested for the UI."""
         args: Dict[str, Any] = normalize_tool_args(fc.name, fc.args)
         tool_name = fc.name
-        plan: Optional["installer.Plan"] = None
-        original_args = args
+        original_args, original_name = args, fc.name
 
-        if tool_name in ("install_from_file", "uninstall_app"):
-            plan = self._plan_for(fc, args)
+        if plan is None and tool_name == "propose_shell_command":
+            # A hand-written unpack/install of a file we can install safely: use the real plan instead.
+            target = installer.handwritten_install_target(str(args.get("command", "")))
+            if target is not None:
+                fc = types.FunctionCall(name="install_from_file", args={"path": str(target)}, id=fc.id)
+                tool_name, args = fc.name, {"path": str(target)}
+
+        if plan is not None or tool_name in ("install_from_file", "uninstall_app"):
+            plan = plan or self._plan_for(fc, args)
             if plan is None:
                 return  # the failure was reported to the model; carry on
             args = {"command": plan.script, "explanation": "\n\n".join(plan.notes), "requires_root": plan.requires_root,
@@ -389,7 +405,7 @@ class AgentOrchestrator:
             payload = {"tool_name": tool_name, "raw_args": args}
 
         # Keep the model's own tool name and arguments so its history stays consistent.
-        normalized_fc = types.FunctionCall(name=fc.name, args=original_args if plan else args, id=fc.id)
+        normalized_fc = types.FunctionCall(name=original_name, args=original_args if plan else args, id=fc.id)
         self._pending_plan = (normalized_fc, plan) if plan else None
         self._pending_tool_call = normalized_fc
         self._set_state(OrchestratorState.AWAITING_APPROVAL)
@@ -405,6 +421,8 @@ class AgentOrchestrator:
         if pending is None or pending[0] is not tool_call or exit_code != 0:
             return
         record = pending[1].record
+        if not record:
+            return
         try:
             if "forget" in record:
                 installer.forget_record(record["forget"])
@@ -524,7 +542,8 @@ class AgentOrchestrator:
             fc = self._batch.popleft()
             logger.debug("Model requested tool: %s", fc.name)
             if fc.name in READONLY_TOOLS:
-                self._handle_readonly_tool(fc)
+                if self._handle_readonly_tool(fc):
+                    return  # paused for approval
             elif fc.name in MUTATING_TOOLS:
                 self._handle_mutating_tool(fc)
                 return  # paused for approval; resumes via _continue()
