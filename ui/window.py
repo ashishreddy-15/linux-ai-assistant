@@ -299,6 +299,7 @@ class MainWindow(Adw.ApplicationWindow):
         )
         self._card = card
         self._chat.add_card(card)
+        GLib.idle_add(lambda: (card.focus_safe_button(), GLib.SOURCE_REMOVE)[1])
 
     def _on_output(self, chunk: str) -> None:
         if self._card is not None:

@@ -260,6 +260,10 @@ class ActionCard(Gtk.Box):
         self._confirm.set_visible(high)
         self._sync_primary()
 
+    def focus_safe_button(self) -> None:
+        """Put keyboard focus on 'Not now' (never on Install), so a stray Enter can't approve anything."""
+        self._reject_btn.grab_focus()
+
     def _sync_primary(self) -> None:
         self._approve_btn.set_sensitive(self._risk != "high" or self._confirm.get_active())
 
