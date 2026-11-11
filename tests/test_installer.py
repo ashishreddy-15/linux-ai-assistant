@@ -249,3 +249,43 @@ class TestPackages(InstallerCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestGuardrail(InstallerCase):
+    def test_handwritten_commands_for_known_files_are_caught(self):
+        tgz = self.tar("app.tar.gz", {"app/app": (b"x", 0o755)})
+        for cmd in (f"tar -xzf {tgz}", f"cd /tmp && tar xvf {tgz} -C /opt", f"sudo rpm -ivh {self.dl}/p.rpm",
+                    f"unzip {self.dl}/z.zip", f"rpm2cpio {self.dl}/p.rpm | cpio -idmv"):
+            (self.dl / "p.rpm").write_bytes(b"\xed\xab\xee\xdb" + b"\0" * 8)
+            zp = self.dl / "z.zip"
+            with zipfile.ZipFile(zp, "w") as zf:
+                info = zipfile.ZipInfo("z/z")
+                info.external_attr = 0o755 << 16
+                zf.writestr(info, "x")
+            with patch.object(installer, "_package_manager", return_value="dnf"), \
+                 patch.object(installer, "inspect_rpm", return_value={"name": "p", "version": "1", "vendor": "", "summary": "",
+                                                                         "adds_repo": False, "signed": True, "has_scripts": False}):
+                self.assertIsNotNone(installer.handwritten_install_target(cmd), cmd)
+
+    def test_listing_and_unrelated_commands_are_left_alone(self):
+        tgz = self.tar("app.tar.gz", {"app/app": (b"x", 0o755)})
+        for cmd in (f"tar -tzf {tgz}", f"unzip -l {tgz}", "ls -la ~/Downloads", "tar -xzf /nonexistent.tar.gz",
+                    "sudo dnf install -y htop"):
+            self.assertIsNone(installer.handwritten_install_target(cmd), cmd)
+
+    def test_orchestrator_swaps_in_the_real_plan(self):
+        from unittest.mock import MagicMock
+
+        from google.genai import types
+
+        from agent.orchestrator import AgentOrchestrator
+
+        tgz = self.tar("Cool.tar.gz", {"Cool/cool": (b"x", 0o755)})
+        orch = AgentOrchestrator(MagicMock())
+        seen = []
+        orch.approval_requested.connect(seen.append)
+        orch._handle_mutating_tool(types.FunctionCall(name="propose_shell_command", id="1", args={
+            "command": f"tar -xzf {tgz} -C /tmp", "explanation": "x", "requires_root": False}))
+        self.assertEqual(seen[0]["title"], "Install cool")
+        self.assertIn("--strip-components=1", seen[0]["command"])
+        self.assertEqual(orch._pending_tool_call.name, "propose_shell_command")

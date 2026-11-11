@@ -180,3 +180,21 @@ class TestOllamaClient(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestFileToolRouting(unittest.TestCase):
+    def test_file_tools_only_when_chat_is_about_downloads(self):
+        from google.genai import types
+
+        from agent.local_llm import wants_file_tools
+
+        def user(text):
+            return types.Content(role="user", parts=[types.Part(text=text)])
+
+        self.assertFalse(wants_file_tools([user("install vlc")]))
+        self.assertFalse(wants_file_tools([user("what is using my memory?")]))
+        for text in ("I downloaded the Antigravity tarball", "install foo.rpm", "remove the app you installed",
+                     "get Proton VPN", "extract this .tar.gz"):
+            self.assertTrue(wants_file_tools([user(text)]), text)
+        call = types.Content(role="model", parts=[types.Part(function_call=types.FunctionCall(name="inspect_download", args={}))])
+        self.assertTrue(wants_file_tools([user("go on"), call]))

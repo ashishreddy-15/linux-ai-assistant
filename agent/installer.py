@@ -474,8 +474,8 @@ def build_plan(path: Path) -> Plan:
         if kind == "rpm" and not info.get("signed"):
             effects.append("Warning: this package is not signed or its key isn't known")
         return Plan("package", name, f"Install {label}", effects,
-                    f"set -e\n{install} {_quote(path)}", True,
-                    notes=["If this only added a repository, install the vendor's app package next."] if info.get("adds_repo") else [],
+                    f"set -e\n{install} {_quote(path)}" + ("\necho 'This only added the vendor repository. Next: search for the vendor app package (search_packages) and install it with the package manager.'" if info.get("adds_repo") else ""), True,
+                    notes=["This only adds the vendor's repository. The app itself is installed from it in a second step."] if info.get("adds_repo") else [],
                     record={**base, "kind": "package", "package": pkg, "remove": f"{remove} {shlex.quote(pkg)}"})
 
     if kind == "appimage":
@@ -635,6 +635,38 @@ def build_removal(query: str) -> Plan:
     return Plan("remove", rec["name"], f"Remove {label}",
                 [f"Deletes {', '.join(rec.get('dirs', []))}", "Removes its menu entry", "Your own files and settings elsewhere stay"],
                 "\n".join(steps), record={"forget": rec["name"]})
+
+
+_HANDWRITTEN = re.compile(
+    r"(?:^|[;&|]\s*|\bsudo\s+)(?:"
+    r"tar\s+(?:-?[a-zA-Z]*x[a-zA-Z]*\b|--extract)|rpm2cpio\s|unzip\s+(?!-l)|bsdtar\s+-?x|7z\s+x|"
+    r"rpm\s+(?:-[a-zA-Z]*[iU][a-zA-Z]*|--install|--upgrade)\b|dpkg\s+-i\b|"
+    r"(?:dnf|dnf5|yum|zypper|apt|apt-get)\s+(?:-\S+\s+)*(?:install|localinstall|in)\b)")
+
+
+def handwritten_install_target(command: str) -> Optional[Path]:
+    """If a model-written command unpacks or installs a local file we know how to install, return that file.
+
+    Small models often improvise `tar -xzf` or `rpm -ivh` instead of using the
+    verified install plan, so the caller swaps this command for the real plan.
+    """
+    if not _HANDWRITTEN.search(command):
+        return None
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return None
+    for tok in tokens:
+        if not tok.lower().endswith(ARCHIVE_SUFFIXES + (".rpm", ".deb", ".appimage")):
+            continue
+        p = Path(tok).expanduser()
+        if p.is_file():
+            try:
+                build_plan(p)
+            except (InstallError, OSError):
+                return None
+            return p.resolve()
+    return None
 
 
 # ---------------------------------------------------------------------------
